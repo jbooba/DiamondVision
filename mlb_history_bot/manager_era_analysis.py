@@ -15,19 +15,19 @@ OFFENSE_HINTS = ("offensive", "offense", "hitting", "hitter", "batting")
 DEFENSE_HINTS = ("defensive", "defense", "fielding", "fielder", "glove")
 TEAM_MANAGER_PATTERNS = (
     re.compile(
-        r"(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60}?)\s+under\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)",
+        r"(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60}?)\s+under\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"under\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)\s+(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60})",
+        r"under\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)\s+(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60})",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60}?)\s+during\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)'s\s+tenure",
+        r"(?:for|on)\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60}?)\s+during\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)'s\s+tenure",
         re.IGNORECASE,
     ),
     re.compile(
-        r"while\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)\s+managed\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60})",
+        r"while\s+(?P<manager>[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)\s+managed\s+(?:the\s+)?(?P<team>[A-Za-z .'-]{2,60})",
         re.IGNORECASE,
     ),
 )
@@ -44,6 +44,7 @@ class ManagerEraQuery:
 class ManagerSeason:
     season: int
     team_name: str
+    team_id: str
     team_code_bref: str
     wins: int
     losses: int
@@ -62,7 +63,7 @@ class ManagerEraAnalysisResearcher:
             return None
 
         if query.focus == "offense":
-            leaders = build_offense_leaderboard(manager_seasons)
+            leaders, citation = build_offense_leaderboard(connection, manager_seasons)
             if not leaders:
                 return None
             summary = build_offense_summary(query, manager_seasons, leaders)
@@ -73,11 +74,12 @@ class ManagerEraAnalysisResearcher:
                 return None
             summary = build_defense_summary(query, manager_seasons, leaders)
             analysis_type = "manager_era_defense"
+            citation = "Lahman managers/team history plus pybaseball FanGraphs batting/fielding leaderboards"
 
         return EvidenceSnippet(
             source="Manager Era Analysis",
             title=f"{query.team_phrase} under {query.manager_name}",
-            citation="Lahman managers/team history plus pybaseball FanGraphs batting/fielding leaderboards",
+            citation=citation,
             summary=summary,
             payload={
                 "analysis_type": analysis_type,
@@ -114,7 +116,10 @@ def fetch_manager_seasons(connection, query: ManagerEraQuery) -> list[ManagerSea
         SELECT
             CAST(m.yearid AS INTEGER) AS season,
             t.name AS team_name,
+            t.teamid AS team_id,
             t.teamidbr AS team_code_bref,
+            t.teamidretro AS team_code_retro,
+            t.franchid AS franchise_id,
             CAST(COALESCE(m.w, '0') AS INTEGER) AS wins,
             CAST(COALESCE(m.l, '0') AS INTEGER) AS losses
         FROM lahman_managers AS m
@@ -124,38 +129,53 @@ def fetch_manager_seasons(connection, query: ManagerEraQuery) -> list[ManagerSea
           ON t.yearid = m.yearid
          AND t.teamid = m.teamid
         WHERE lower(trim(coalesce(p.namefirst, '') || ' ' || coalesce(p.namelast, ''))) = ?
-          AND (
-            lower(t.name) = ?
-            OR lower(t.name) LIKE ?
-            OR lower(t.teamidbr) = ?
-            OR lower(t.teamidretro) = ?
-            OR lower(t.franchid) = ?
-          )
-        ORDER BY CAST(m.yearid AS INTEGER)
+           OR lower(coalesce(p.namefirst, '')) = ?
+           OR lower(coalesce(p.namelast, '')) = ?
+           OR lower(trim(coalesce(p.namefirst, '') || ' ' || coalesce(p.namelast, ''))) LIKE ?
         """,
         (
             query.manager_name.lower(),
-            query.team_phrase.lower(),
-            f"%{query.team_phrase.lower()}%",
-            query.team_phrase.lower(),
-            query.team_phrase.lower(),
-            query.team_phrase.lower(),
+            query.manager_name.lower(),
+            query.manager_name.lower(),
+            f"%{query.manager_name.lower()}%",
         ),
     ).fetchall()
+    rows = [
+        row
+        for row in rows
+        if (
+            str(row["team_name"] or "").strip().lower() == query.team_phrase.lower()
+            or query.team_phrase.lower() in str(row["team_name"] or "").strip().lower()
+            or str(row["team_code_bref"] or "").strip().lower() == query.team_phrase.lower()
+            or str(row["team_code_retro"] or "").strip().lower() == query.team_phrase.lower()
+            or str(row["franchise_id"] or "").strip().lower() == query.team_phrase.lower()
+        )
+    ]
     return [
         ManagerSeason(
             season=int(row["season"]),
             team_name=str(row["team_name"]),
+            team_id=str(row["team_id"] or ""),
             team_code_bref=str(row["team_code_bref"] or ""),
             wins=int(row["wins"]),
             losses=int(row["losses"]),
         )
         for row in rows
-        if str(row["team_code_bref"] or "").strip()
+        if str(row["team_code_bref"] or "").strip() and str(row["team_id"] or "").strip()
     ]
 
 
-def build_offense_leaderboard(manager_seasons: list[ManagerSeason]) -> list[dict[str, Any]]:
+def build_offense_leaderboard(connection, manager_seasons: list[ManagerSeason]) -> tuple[list[dict[str, Any]], str]:
+    pybaseball_leaders = build_offense_leaderboard_from_pybaseball(manager_seasons)
+    if pybaseball_leaders:
+        return pybaseball_leaders, "Lahman managers/team history plus pybaseball FanGraphs batting leaderboards"
+    local_leaders = build_offense_leaderboard_from_lahman(connection, manager_seasons)
+    if local_leaders:
+        return local_leaders, "Lahman managers/team history plus Lahman batting totals"
+    return [], ""
+
+
+def build_offense_leaderboard_from_pybaseball(manager_seasons: list[ManagerSeason]) -> list[dict[str, Any]]:
     aggregates: dict[str, dict[str, Any]] = {}
     for season in manager_seasons:
         rows = load_batting_stats(season.season, season.season)
@@ -234,6 +254,120 @@ def build_offense_leaderboard(manager_seasons: list[ManagerSeason]) -> list[dict
     return leaders[:5]
 
 
+def build_offense_leaderboard_from_lahman(connection, manager_seasons: list[ManagerSeason]) -> list[dict[str, Any]]:
+    if not (table_exists(connection, "lahman_batting") and table_exists(connection, "lahman_people")):
+        return []
+    aggregates: dict[str, dict[str, Any]] = {}
+    for season in manager_seasons:
+        rows = connection.execute(
+            """
+            SELECT
+                b.playerid,
+                p.namefirst,
+                p.namelast,
+                SUM(CAST(COALESCE(b.g, '0') AS INTEGER)) AS g,
+                SUM(CAST(COALESCE(b.ab, '0') AS INTEGER)) AS ab,
+                SUM(CAST(COALESCE(b.h, '0') AS INTEGER)) AS h,
+                SUM(CAST(COALESCE(b.c_2b, '0') AS INTEGER)) AS d2,
+                SUM(CAST(COALESCE(b.c_3b, '0') AS INTEGER)) AS d3,
+                SUM(CAST(COALESCE(b.hr, '0') AS INTEGER)) AS hr,
+                SUM(CAST(COALESCE(b.r, '0') AS INTEGER)) AS r,
+                SUM(CAST(COALESCE(b.rbi, '0') AS INTEGER)) AS rbi,
+                SUM(CAST(COALESCE(b.bb, '0') AS INTEGER)) AS bb,
+                SUM(CAST(COALESCE(b.hbp, '0') AS INTEGER)) AS hbp,
+                SUM(CAST(COALESCE(b.sf, '0') AS INTEGER)) AS sf,
+                SUM(CAST(COALESCE(b.sh, '0') AS INTEGER)) AS sh
+            FROM lahman_batting AS b
+            JOIN lahman_people AS p
+              ON p.playerid = b.playerid
+            WHERE CAST(b.yearid AS INTEGER) = ?
+              AND lower(b.teamid) = ?
+            GROUP BY b.playerid, p.namefirst, p.namelast
+            """,
+            (season.season, season.team_id.lower()),
+        ).fetchall()
+        for row in rows:
+            name = f"{row['namefirst']} {row['namelast']}".strip()
+            if not name:
+                continue
+            aggregate = aggregates.setdefault(
+                name,
+                {
+                    "player": name,
+                    "games": 0,
+                    "plate_appearances": 0,
+                    "at_bats": 0,
+                    "hits": 0,
+                    "doubles": 0,
+                    "triples": 0,
+                    "home_runs": 0,
+                    "runs": 0,
+                    "runs_batted_in": 0,
+                    "walks": 0,
+                    "hit_by_pitch": 0,
+                    "sacrifice_flies": 0,
+                    "wrc_plus_weight": 0.0,
+                    "war": 0.0,
+                },
+            )
+            at_bats = int(row["ab"] or 0)
+            walks = int(row["bb"] or 0)
+            hit_by_pitch = int(row["hbp"] or 0)
+            sacrifice_flies = int(row["sf"] or 0)
+            sacrifice_hits = int(row["sh"] or 0)
+            plate_appearances = at_bats + walks + hit_by_pitch + sacrifice_flies + sacrifice_hits
+            aggregate["games"] += int(row["g"] or 0)
+            aggregate["plate_appearances"] += plate_appearances
+            aggregate["at_bats"] += at_bats
+            aggregate["hits"] += int(row["h"] or 0)
+            aggregate["doubles"] += int(row["d2"] or 0)
+            aggregate["triples"] += int(row["d3"] or 0)
+            aggregate["home_runs"] += int(row["hr"] or 0)
+            aggregate["runs"] += int(row["r"] or 0)
+            aggregate["runs_batted_in"] += int(row["rbi"] or 0)
+            aggregate["walks"] += walks
+            aggregate["hit_by_pitch"] += hit_by_pitch
+            aggregate["sacrifice_flies"] += sacrifice_flies
+
+    leaders: list[dict[str, Any]] = []
+    for aggregate in aggregates.values():
+        if aggregate["plate_appearances"] < 100:
+            continue
+        ops = compute_ops(
+            aggregate["hits"],
+            aggregate["doubles"],
+            aggregate["triples"],
+            aggregate["home_runs"],
+            aggregate["at_bats"],
+            aggregate["walks"],
+            aggregate["hit_by_pitch"],
+            aggregate["sacrifice_flies"],
+        )
+        leaders.append(
+            {
+                "player": aggregate["player"],
+                "games": aggregate["games"],
+                "plate_appearances": aggregate["plate_appearances"],
+                "hits": aggregate["hits"],
+                "home_runs": aggregate["home_runs"],
+                "runs": aggregate["runs"],
+                "runs_batted_in": aggregate["runs_batted_in"],
+                "ops": round(ops, 3) if ops is not None else None,
+                "wrc_plus": None,
+                "war": None,
+            }
+        )
+    leaders.sort(
+        key=lambda item: (
+            (item["ops"] or 0.0),
+            item["plate_appearances"],
+            item["home_runs"],
+        ),
+        reverse=True,
+    )
+    return leaders[:5]
+
+
 def build_defense_leaderboard(manager_seasons: list[ManagerSeason]) -> list[dict[str, Any]]:
     aggregates: dict[str, dict[str, Any]] = {}
     for season in manager_seasons:
@@ -285,16 +419,28 @@ def build_defense_leaderboard(manager_seasons: list[ManagerSeason]) -> list[dict
 def build_offense_summary(query: ManagerEraQuery, manager_seasons: list[ManagerSeason], leaders: list[dict[str, Any]]) -> str:
     leader = leaders[0]
     span = format_manager_span(manager_seasons)
-    trailing = "; ".join(
-        f"{row['player']} ({row['wrc_plus']} wRC+, {row['ops']} OPS)"
-        for row in leaders[1:4]
-    )
-    summary = (
-        f"Using public batting production across {span}, {leader['player']} was the strongest offensive player for "
-        f"the {manager_seasons[0].team_name} under {query.manager_name}. "
-        f"They put up a {leader['wrc_plus']} wRC+ and {leader['ops']} OPS over {leader['plate_appearances']} PA, "
-        f"with {leader['home_runs']} HR and {leader['runs_batted_in']} RBI."
-    )
+    if leader.get("wrc_plus") is not None:
+        trailing = "; ".join(
+            f"{row['player']} ({row['wrc_plus']} wRC+, {row['ops']} OPS)"
+            for row in leaders[1:4]
+        )
+        summary = (
+            f"Using public batting production across {span}, {leader['player']} was the strongest offensive player for "
+            f"the {manager_seasons[0].team_name} under {query.manager_name}. "
+            f"They put up a {leader['wrc_plus']} wRC+ and {leader['ops']} OPS over {leader['plate_appearances']} PA, "
+            f"with {leader['home_runs']} HR and {leader['runs_batted_in']} RBI."
+        )
+    else:
+        trailing = "; ".join(
+            f"{row['player']} ({row['ops']} OPS, {row['home_runs']} HR)"
+            for row in leaders[1:4]
+        )
+        summary = (
+            f"Using local batting totals across {span}, {leader['player']} was the strongest offensive player for "
+            f"the {manager_seasons[0].team_name} under {query.manager_name}. "
+            f"They posted a {leader['ops']} OPS over {leader['plate_appearances']} PA, "
+            f"with {leader['home_runs']} HR, {leader['runs_batted_in']} RBI, and {leader['runs']} runs scored."
+        )
     if trailing:
         summary = f"{summary} Next on the board: {trailing}."
     return summary

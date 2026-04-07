@@ -117,6 +117,9 @@ def parse_statcast_relationship_query(question: str, current_season: int) -> Sta
     if "most pitches over 100" in lowered or "over 100mph" in lowered or "100 mph" in lowered:
         aggregate_by = "pitcher"
         event_filter = None
+    elif pitch_family and re.search(r"\bmost\b", lowered) and re.search(r"\b(?:threw|thrown|throwing|pitches?|fastballs?|sliders?|curveballs?|changeups?)\b", lowered):
+        aggregate_by = "pitcher"
+        event_filter = None
     elif "most strikeouts" in lowered and pitch_family:
         aggregate_by = "pitcher"
         event_filter = STRIKEOUT_EVENTS
@@ -326,6 +329,17 @@ def query_precomputed_statcast_relationship(
             top_metric_expression="MAX(max_release_speed)",
         )
 
+    if query.pitch_family and query.event_filter is None and query.metric_threshold_key is None:
+        pitch_count_column = precomputed_pitch_family_pitch_count_column(query.pitch_family)
+        if pitch_count_column is None:
+            return None
+        return query_precomputed_pitcher_aggregate(
+            connection,
+            query,
+            count_expression=f"SUM({pitch_count_column})",
+            top_metric_expression="MAX(max_release_speed)",
+        )
+
     if query.event_filter == STRIKEOUT_EVENTS and query.pitch_family:
         strikeout_column = precomputed_pitch_family_strikeout_column(query.pitch_family)
         if strikeout_column is None:
@@ -415,6 +429,15 @@ def precomputed_pitch_family_strikeout_column(pitch_family: str) -> str | None:
         "changeup": "changeup_strikeouts",
         "curveball": "curveball_strikeouts",
         "slider": "slider_strikeouts",
+    }.get(pitch_family)
+
+
+def precomputed_pitch_family_pitch_count_column(pitch_family: str) -> str | None:
+    return {
+        "fastball": "fastball_pitches",
+        "changeup": "changeup_pitches",
+        "curveball": "curveball_pitches",
+        "slider": "slider_pitches",
     }.get(pitch_family)
 
 
@@ -592,6 +615,11 @@ def build_statcast_relationship_summary(
         if query.event_filter == STRIKEOUT_EVENTS and query.pitch_family:
             summary = (
                 f"Across {query.scope_label}, {leader['pitcher']} has the most tracked strikeouts ending on "
+                f"{query.pitch_family}s with {leader['count']}."
+            )
+        elif query.pitch_family and query.metric_threshold_key is None:
+            summary = (
+                f"Across {query.scope_label}, {leader['pitcher']} has thrown the most tracked "
                 f"{query.pitch_family}s with {leader['count']}."
             )
         elif query.metric_threshold_key == "release_speed":
