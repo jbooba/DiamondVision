@@ -3,7 +3,9 @@ import sqlite3
 from mlb_history_bot.config import Settings
 from mlb_history_bot.historical_team_facts import (
     HistoricalTeamFactsResearcher,
+    extract_team_phrase_from_fact_question,
     extract_team_phrase_from_manager_question,
+    parse_historical_team_fact_query,
     parse_historical_manager_query,
 )
 
@@ -81,6 +83,18 @@ def test_extract_team_phrase_from_manager_question() -> None:
     assert extract_team_phrase_from_manager_question("Who managed the New York Mets in 2023?", 2023) == "New York Mets"
 
 
+def test_parse_historical_team_fact_query() -> None:
+    query = parse_historical_team_fact_query("How many wins did the 2023 Mets have?")
+    assert query is not None
+    assert query.season == 2023
+    assert query.team_phrase == "Mets"
+    assert query.fact == "wins"
+
+
+def test_extract_team_phrase_from_fact_question() -> None:
+    assert extract_team_phrase_from_fact_question("How many wins did the New York Mets have in 2023?", 2023) == "New York Mets"
+
+
 def test_build_manager_snippet_from_local_lahman_tables() -> None:
     settings = Settings.from_env()
     researcher = HistoricalTeamFactsResearcher(settings)
@@ -93,3 +107,17 @@ def test_build_manager_snippet_from_local_lahman_tables() -> None:
     assert "Buck Showalter" in snippet.summary
     assert snippet.payload["analysis_type"] == "historical_manager_lookup"
     assert snippet.payload["rows"][0]["manager"] == "Buck Showalter"
+
+
+def test_build_team_fact_snippet_from_local_lahman_tables() -> None:
+    settings = Settings.from_env()
+    researcher = HistoricalTeamFactsResearcher(settings)
+    connection = build_test_connection()
+    try:
+        snippet = researcher.build_snippet(connection, "How many wins did the 2023 Mets have?")
+    finally:
+        connection.close()
+    assert snippet is not None
+    assert "won 75 games" in snippet.summary
+    assert snippet.payload["analysis_type"] == "historical_team_fact_lookup"
+    assert snippet.payload["rows"][0]["wins"] == 75

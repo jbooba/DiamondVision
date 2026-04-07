@@ -16,12 +16,20 @@ from .team_season_compare import clean_team_phrase, resolve_team_season_referenc
 
 
 MANAGER_TERMS = ("manager", "managed", "skipper")
+WINS_TERMS = ("wins", "won", "win total")
+LOSSES_TERMS = ("losses", "lost", "loss total")
+RECORD_TERMS = ("record",)
+WIN_PCT_TERMS = ("winning percentage", "win percentage", "win pct", "winning pct")
 QUESTION_FILLER_PATTERN = re.compile(
     r"\b(?:who|was|were|is|are|the|of|for|in|during|did|do|does|current|historically|historical)\b",
     re.IGNORECASE,
 )
 MANAGER_FILLER_PATTERN = re.compile(
     r"\b(?:manager|managed|skipper|head\s+coach|coach)\b",
+    re.IGNORECASE,
+)
+TEAM_FACT_FILLER_PATTERN = re.compile(
+    r"\b(?:wins?|won|loss(?:es)?|lost|record|winning|percentage|pct|total|have|had|did|how|many|what|were|was|the|of|for|in|during)\b",
     re.IGNORECASE,
 )
 YEAR_PATTERN = re.compile(r"\b(18\d{2}|19\d{2}|20\d{2})\b")
@@ -33,27 +41,45 @@ class HistoricalManagerQuery:
     team_phrase: str
 
 
+@dataclass(slots=True)
+class HistoricalTeamFactQuery:
+    season: int
+    team_phrase: str
+    fact: str
+
+
 class HistoricalTeamFactsResearcher:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.live_client = LiveStatsClient(settings)
 
     def build_snippet(self, connection, question: str) -> EvidenceSnippet | None:
-        query = parse_historical_manager_query(question)
-        if query is None:
-            return None
+        manager_query = parse_historical_manager_query(question)
+        if manager_query is not None:
+            return self._build_manager_snippet(connection, manager_query)
 
+        fact_query = parse_historical_team_fact_query(question)
+        if fact_query is not None:
+            return self._build_team_fact_snippet(connection, fact_query)
+        return None
+
+    def _resolve_reference(self, connection, team_phrase: str, season: int):
         current_season = self.settings.live_season or date.today().year
         reference = resolve_team_season_reference(
             connection,
-            query.team_phrase,
-            query.season,
+            team_phrase,
+            season,
             self.live_client,
             current_season,
         )
         if reference is None or reference.live_team is not None:
             return None
+        return reference
 
+    def _build_manager_snippet(self, connection, query: HistoricalManagerQuery) -> EvidenceSnippet | None:
+        reference = self._resolve_reference(connection, query.team_phrase, query.season)
+        if reference is None:
+            return None
         manager_rows = load_local_manager_rows(connection, reference.season, reference.display_name, reference.team_code)
         citation = "Lahman Managers + People + Teams tables"
         if not manager_rows:
@@ -77,6 +103,29 @@ class HistoricalTeamFactsResearcher:
             },
         )
 
+    def _build_team_fact_snippet(self, connection, query: HistoricalTeamFactQuery) -> EvidenceSnippet | None:
+        reference = self._resolve_reference(connection, query.team_phrase, query.season)
+        if reference is None:
+            return None
+        team_row = load_local_team_fact_row(connection, reference.season, reference.display_name, reference.team_code)
+        if not team_row:
+            return None
+        summary = build_team_fact_summary(reference.display_name, team_row, query.fact)
+        return EvidenceSnippet(
+            source="Historical Team Facts",
+            title=f"{reference.display_name} team fact lookup",
+            citation="Lahman Teams table",
+            summary=summary,
+            payload={
+                "analysis_type": "historical_team_fact_lookup",
+                "mode": "historical",
+                "season": reference.season,
+                "team": reference.display_name,
+                "fact": query.fact,
+                "rows": [team_row],
+            },
+        )
+
 
 def parse_historical_manager_query(question: str) -> HistoricalManagerQuery | None:
     lowered = question.lower()
@@ -91,10 +140,44 @@ def parse_historical_manager_query(question: str) -> HistoricalManagerQuery | No
     return HistoricalManagerQuery(season=season, team_phrase=team_phrase)
 
 
+def parse_historical_team_fact_query(question: str) -> HistoricalTeamFactQuery | None:
+    lowered = question.lower()
+    season = extract_explicit_year(question)
+    if season is None:
+        return None
+    fact = detect_team_fact(lowered)
+    if fact is None:
+        return None
+    team_phrase = extract_team_phrase_from_fact_question(question, season)
+    if not team_phrase:
+        return None
+    return HistoricalTeamFactQuery(season=season, team_phrase=team_phrase, fact=fact)
+
+
+def detect_team_fact(lowered_question: str) -> str | None:
+    if any(term in lowered_question for term in WIN_PCT_TERMS):
+        return "win_pct"
+    if any(term in lowered_question for term in RECORD_TERMS):
+        return "record"
+    if any(term in lowered_question for term in WINS_TERMS):
+        return "wins"
+    if any(term in lowered_question for term in LOSSES_TERMS):
+        return "losses"
+    return None
+
+
 def extract_team_phrase_from_manager_question(question: str, season: int) -> str:
     cleaned = YEAR_PATTERN.sub(" ", question)
     cleaned = MANAGER_FILLER_PATTERN.sub(" ", cleaned)
     cleaned = QUESTION_FILLER_PATTERN.sub(" ", cleaned)
+    cleaned = re.sub(r"[?.!,:'\"]", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return clean_team_phrase(cleaned)
+
+
+def extract_team_phrase_from_fact_question(question: str, season: int) -> str:
+    cleaned = YEAR_PATTERN.sub(" ", question)
+    cleaned = TEAM_FACT_FILLER_PATTERN.sub(" ", cleaned)
     cleaned = re.sub(r"[?.!,:'\"]", " ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return clean_team_phrase(cleaned)
@@ -144,6 +227,65 @@ def load_local_manager_rows(connection, season: int, display_name: str, team_cod
         }
         for row in rows
     ]
+
+
+def load_local_team_fact_row(connection, season: int, display_name: str, team_code: str | None) -> dict[str, Any] | None:
+    if not table_exists(connection, "lahman_teams"):
+        return None
+    team_name = display_name.split(" ", 1)[1] if " " in display_name else display_name
+    row = connection.execute(
+        """
+        SELECT
+            yearid,
+            name,
+            w,
+            l,
+            g,
+            rank,
+            divwin,
+            wcwin,
+            lgwin,
+            wswin
+        FROM lahman_teams
+        WHERE CAST(yearid AS INTEGER) = ?
+          AND (
+            lower(name) = ?
+            OR lower(teamidretro) = ?
+            OR lower(teamid) = ?
+            OR lower(franchid) = ?
+          )
+        ORDER BY
+            CASE WHEN lower(name) = ? THEN 0 ELSE 1 END,
+            CAST(COALESCE(w, '0') AS INTEGER) DESC,
+            CAST(COALESCE(l, '0') AS INTEGER) ASC
+        LIMIT 1
+        """,
+        (
+            season,
+            team_name.lower(),
+            (team_code or "").lower(),
+            (team_code or "").lower(),
+            (team_code or "").lower(),
+            team_name.lower(),
+        ),
+    ).fetchone()
+    if row is None:
+        return None
+    wins = safe_int(row["w"]) or 0
+    losses = safe_int(row["l"]) or 0
+    games = safe_int(row["g"]) or (wins + losses)
+    win_pct = (wins / (wins + losses)) if (wins + losses) else None
+    return {
+        "team": str(row["name"]),
+        "season": safe_int(row["yearid"]) or season,
+        "wins": wins,
+        "losses": losses,
+        "games": games,
+        "win_pct": round(win_pct, 3) if win_pct is not None else None,
+        "finish": safe_int(row["rank"]),
+        "won_league": str(row["lgwin"] or "").upper() == "Y",
+        "won_world_series": str(row["wswin"] or "").upper() == "Y",
+    }
 
 
 def load_pybaseball_manager_rows(season: int, display_name: str, team_code: str | None) -> list[dict[str, Any]]:
@@ -240,6 +382,36 @@ def build_manager_summary(display_name: str, manager_rows: list[dict[str, Any]])
     return f"{display_name} used {len(manager_rows)} managers: " + "; ".join(parts) + "."
 
 
+def build_team_fact_summary(display_name: str, team_row: dict[str, Any], fact: str) -> str:
+    wins = team_row["wins"]
+    losses = team_row["losses"]
+    win_pct = team_row.get("win_pct")
+    finish = team_row.get("finish")
+    finish_text = f", finishing {ordinal_suffix(finish)}" if finish else ""
+    postseason_bits = []
+    if team_row.get("won_league"):
+        postseason_bits.append("won the pennant")
+    if team_row.get("won_world_series"):
+        postseason_bits.append("won the World Series")
+    postseason_text = f" They also {', and '.join(postseason_bits)}." if postseason_bits else ""
+    if fact == "wins":
+        return (
+            f"The {display_name} won {wins} games. They finished {wins}-{losses}"
+            f" ({format_win_pct(win_pct)}){finish_text}.{postseason_text}"
+        )
+    if fact == "losses":
+        return (
+            f"The {display_name} lost {losses} games. They finished {wins}-{losses}"
+            f" ({format_win_pct(win_pct)}){finish_text}.{postseason_text}"
+        )
+    if fact == "win_pct":
+        return (
+            f"The {display_name} posted a {format_win_pct(win_pct)} winning percentage"
+            f" with a {wins}-{losses} record{finish_text}.{postseason_text}"
+        )
+    return f"The {display_name} went {wins}-{losses} ({format_win_pct(win_pct)}){finish_text}.{postseason_text}"
+
+
 def ordinal_suffix(value: int | None) -> str:
     if value is None:
         return ""
@@ -248,3 +420,9 @@ def ordinal_suffix(value: int | None) -> str:
     else:
         suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
     return f"{value}{suffix}"
+
+
+def format_win_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.3f}"

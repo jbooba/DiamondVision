@@ -28,10 +28,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
+        size = settings.database_path.stat().st_size if settings.database_path.exists() else 0
         return {
             "ok": True,
             "database_path": str(settings.database_path),
             "database_exists": settings.database_path.exists(),
+            "database_size_bytes": size,
         }
 
     @app.post("/chat")
