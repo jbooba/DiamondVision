@@ -3,6 +3,6 @@ openai>=1.109.0
 pandas>=2.2.0
 pydantic>=2.11.0
 pypdf>=5.4.0
-pybaseball>=2.2.7
+pybaseball @ https://github.com/nicko4o/pybaseball/archive/4680682cb1c17815c473f48697425a6cdd1d2ca5.tar.gz
 python-dotenv>=1.1.0
 uvicorn>=0.35.0
