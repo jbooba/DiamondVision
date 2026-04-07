@@ -384,6 +384,9 @@ def prepare_statcast_pitch_rows(frame):
     game_dates = pd.to_datetime(pitches["game_date"], errors="coerce")
     pitches["season"] = game_dates.dt.year.astype("Int64")
     pitches["game_date_iso"] = game_dates.dt.strftime("%Y-%m-%d")
+    pitches["game_pk"] = pd.to_numeric(column_or_default(pitches, "game_pk"), errors="coerce").astype("Int64")
+    pitches["at_bat_number"] = pd.to_numeric(column_or_default(pitches, "at_bat_number"), errors="coerce").astype("Int64")
+    pitches["pitch_number"] = pd.to_numeric(column_or_default(pitches, "pitch_number"), errors="coerce").astype("Int64")
     pitches["pitcher_id"] = pd.to_numeric(column_or_default(pitches, "pitcher"), errors="coerce").astype("Int64")
     pitches["pitcher_name_fmt"] = column_or_default(pitches, "player_name").fillna("").map(format_statcast_pitcher_name)
     pitches["batter_id"] = pd.to_numeric(column_or_default(pitches, "batter"), errors="coerce").astype("Int64")
@@ -435,20 +438,43 @@ def prepare_statcast_pitch_rows(frame):
     pitches["horizontal_location"] = classify_horizontal_location_series(plate_x, stand)
     pitches["vertical_location"] = classify_vertical_location_series(plate_z, sz_top, sz_bot)
     pitches["field_direction"] = pitches["description_text"].map(extract_field_direction_from_description)
+    dedupe_subset = ["game_pk", "at_bat_number", "pitch_number"]
+    identifiable = pitches[dedupe_subset].notna().all(axis=1)
+    if identifiable.any():
+        identified = pitches.loc[identifiable].drop_duplicates(subset=dedupe_subset, keep="last")
+        unidentified = pitches.loc[~identifiable]
+        pitches = pd.concat([identified, unidentified], ignore_index=True)
     return pitches
 
 
 def prepare_statcast_final_events(frame):
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise RuntimeError("pandas is required for Statcast aggregation") from exc
     pitches = prepare_statcast_pitch_rows(frame)
     if pitches.empty:
         return pitches
     final = pitches[pitches["event_name"].ne("")].copy()
     final = final[final["event_name"] != "truncated_pa"]
+    dedupe_subset = ["game_pk", "at_bat_number", "pitch_number"]
+    identifiable = final[dedupe_subset].notna().all(axis=1)
+    if identifiable.any():
+        identified = final.loc[identifiable].drop_duplicates(subset=dedupe_subset, keep="last")
+        unidentified = final.loc[~identifiable]
+        final = pd.concat([identified, unidentified], ignore_index=True)
     return final
 
 
 def aggregate_statcast_team_games(frame) -> list[dict[str, Any]]:
     final = prepare_statcast_final_events(frame)
+    if final.empty:
+        return []
+    final = final[
+        final["game_pk"].notna()
+        & final["game_date_iso"].notna()
+        & final["batting_team"].fillna("").ne("")
+    ].copy()
     if final.empty:
         return []
     final["is_home"] = final["batting_team"].eq(final["home_team"]).astype(int)
@@ -466,38 +492,39 @@ def aggregate_statcast_team_games(frame) -> list[dict[str, Any]]:
 
     grouped = (
         final.groupby(
-            ["season", "game_date_iso", "game_pk", "batting_team", "pitching_team", "is_home"],
+            ["season", "game_date_iso", "game_pk", "batting_team"],
             dropna=False,
-        )[
-            [
-                "plate_appearances",
-                "at_bats",
-                "hits",
-                "strikeouts",
-                "batted_ball_events",
-                "xba_numerator",
-                "xwoba_numerator",
-                "xwoba_denom",
-                "xslg_numerator",
-                "hard_hit_bbe",
-                "barrel_bbe",
-                "launch_speed_sum",
-                "launch_speed_count",
-            ]
-        ]
-        .sum()
+        )
+        .agg(
+            opponent=("pitching_team", "first"),
+            is_home=("is_home", "first"),
+            plate_appearances=("plate_appearances", "sum"),
+            at_bats=("at_bats", "sum"),
+            hits=("hits", "sum"),
+            strikeouts=("strikeouts", "sum"),
+            batted_ball_events=("batted_ball_events", "sum"),
+            xba_numerator=("xba_numerator", "sum"),
+            xwoba_numerator=("xwoba_numerator", "sum"),
+            xwoba_denom=("xwoba_denom", "sum"),
+            xslg_numerator=("xslg_numerator", "sum"),
+            hard_hit_bbe=("hard_hit_bbe", "sum"),
+            barrel_bbe=("barrel_bbe", "sum"),
+            launch_speed_sum=("launch_speed_sum", "sum"),
+            launch_speed_count=("launch_speed_count", "sum"),
+        )
         .reset_index()
     )
     grouped["team_name"] = grouped["batting_team"].map(TEAM_NAMES).fillna(grouped["batting_team"])
-    grouped["opponent_name"] = grouped["pitching_team"].map(TEAM_NAMES).fillna(grouped["pitching_team"])
+    grouped["opponent_name"] = grouped["opponent"].map(TEAM_NAMES).fillna(grouped["opponent"])
     grouped.rename(
         columns={
             "game_date_iso": "game_date",
             "batting_team": "team",
-            "pitching_team": "opponent",
         },
         inplace=True,
     )
+    grouped["season"] = grouped["season"].fillna(0).astype(int)
+    grouped["game_pk"] = grouped["game_pk"].fillna(0).astype(int)
     return grouped.to_dict(orient="records")
 
 
@@ -527,14 +554,18 @@ def aggregate_statcast_pitcher_games(frame) -> list[dict[str, Any]]:
     grouped = (
         pitches[
             pitches["game_date_iso"].notna()
+            & pitches["game_pk"].notna()
             & pitches["pitcher_id"].notna()
             & pitches["pitcher_name_fmt"].ne("")
         ]
         .groupby(
-            ["season", "game_date_iso", "game_pk", "pitcher_id", "pitcher_name_fmt", "pitching_team", "batting_team"],
+            ["season", "game_date_iso", "game_pk", "pitcher_id"],
             dropna=False,
         )
         .agg(
+            pitcher_name=("pitcher_name_fmt", "first"),
+            team=("pitching_team", "first"),
+            opponent=("batting_team", "first"),
             total_pitches=("total_pitches", "sum"),
             max_release_speed=("release_speed_num", "max"),
             pitches_95_plus=("pitches_95_plus", "sum"),
@@ -555,18 +586,16 @@ def aggregate_statcast_pitcher_games(frame) -> list[dict[str, Any]]:
         )
         .reset_index()
     )
-    grouped["team_name"] = grouped["pitching_team"].map(TEAM_NAMES).fillna(grouped["pitching_team"])
-    grouped["opponent_name"] = grouped["batting_team"].map(TEAM_NAMES).fillna(grouped["batting_team"])
+    grouped["team_name"] = grouped["team"].map(TEAM_NAMES).fillna(grouped["team"])
+    grouped["opponent_name"] = grouped["opponent"].map(TEAM_NAMES).fillna(grouped["opponent"])
     grouped.rename(
         columns={
             "game_date_iso": "game_date",
-            "pitcher_name_fmt": "pitcher_name",
-            "pitching_team": "team",
-            "batting_team": "opponent",
         },
         inplace=True,
     )
     grouped["season"] = grouped["season"].fillna(0).astype(int)
+    grouped["game_pk"] = grouped["game_pk"].fillna(0).astype(int)
     grouped["pitcher_id"] = grouped["pitcher_id"].fillna(0).astype(int)
     return grouped.to_dict(orient="records")
 
@@ -577,6 +606,7 @@ def aggregate_statcast_batter_games(frame) -> list[dict[str, Any]]:
         return []
     final = final[
         final["game_date_iso"].notna()
+        & final["game_pk"].notna()
         & final["batter_id"].notna()
         & final["batter_name_fmt"].ne("")
     ].copy()
@@ -601,10 +631,13 @@ def aggregate_statcast_batter_games(frame) -> list[dict[str, Any]]:
     final["launch_speed_count"] = final["tracked_bbe"]
     grouped = (
         final.groupby(
-            ["season", "game_date_iso", "game_pk", "batter_id", "batter_name_fmt", "batting_team", "pitching_team"],
+            ["season", "game_date_iso", "game_pk", "batter_id"],
             dropna=False,
         )
         .agg(
+            batter_name=("batter_name_fmt", "first"),
+            team=("batting_team", "first"),
+            opponent=("pitching_team", "first"),
             plate_appearances=("plate_appearances", "sum"),
             at_bats=("at_bats", "sum"),
             hits=("hits", "sum"),
@@ -630,18 +663,11 @@ def aggregate_statcast_batter_games(frame) -> list[dict[str, Any]]:
         )
         .reset_index()
     )
-    grouped["team_name"] = grouped["batting_team"].map(TEAM_NAMES).fillna(grouped["batting_team"])
-    grouped["opponent_name"] = grouped["pitching_team"].map(TEAM_NAMES).fillna(grouped["pitching_team"])
-    grouped.rename(
-        columns={
-            "game_date_iso": "game_date",
-            "batter_name_fmt": "batter_name",
-            "batting_team": "team",
-            "pitching_team": "opponent",
-        },
-        inplace=True,
-    )
+    grouped["team_name"] = grouped["team"].map(TEAM_NAMES).fillna(grouped["team"])
+    grouped["opponent_name"] = grouped["opponent"].map(TEAM_NAMES).fillna(grouped["opponent"])
+    grouped.rename(columns={"game_date_iso": "game_date"}, inplace=True)
     grouped["season"] = grouped["season"].fillna(0).astype(int)
+    grouped["game_pk"] = grouped["game_pk"].fillna(0).astype(int)
     grouped["batter_id"] = grouped["batter_id"].fillna(0).astype(int)
     return grouped.to_dict(orient="records")
 
@@ -652,6 +678,7 @@ def aggregate_statcast_pitch_type_games(frame) -> list[dict[str, Any]]:
         return []
     pitches = pitches[
         pitches["game_date_iso"].notna()
+        & pitches["game_pk"].notna()
         & pitches["pitcher_id"].notna()
         & pitches["pitcher_name_fmt"].ne("")
         & pitches["pitch_type_code"].ne("")
@@ -666,16 +693,16 @@ def aggregate_statcast_pitch_type_games(frame) -> list[dict[str, Any]]:
                 "game_date_iso",
                 "game_pk",
                 "pitcher_id",
-                "pitcher_name_fmt",
-                "pitching_team",
-                "batting_team",
                 "pitch_type_code",
-                "pitch_name_fmt",
-                "pitch_family",
             ],
             dropna=False,
         )
         .agg(
+            pitcher_name=("pitcher_name_fmt", "first"),
+            team=("pitching_team", "first"),
+            opponent=("batting_team", "first"),
+            pitch_name=("pitch_name_fmt", "first"),
+            pitch_family=("pitch_family", "first"),
             pitches=("pitches", "sum"),
             avg_release_speed=("release_speed_num", "mean"),
             max_release_speed=("release_speed_num", "max"),
@@ -699,20 +726,11 @@ def aggregate_statcast_pitch_type_games(frame) -> list[dict[str, Any]]:
         )
         .reset_index()
     )
-    grouped["team_name"] = grouped["pitching_team"].map(TEAM_NAMES).fillna(grouped["pitching_team"])
-    grouped["opponent_name"] = grouped["batting_team"].map(TEAM_NAMES).fillna(grouped["batting_team"])
-    grouped.rename(
-        columns={
-            "game_date_iso": "game_date",
-            "pitcher_name_fmt": "pitcher_name",
-            "pitching_team": "team",
-            "batting_team": "opponent",
-            "pitch_type_code": "pitch_type",
-            "pitch_name_fmt": "pitch_name",
-        },
-        inplace=True,
-    )
+    grouped["team_name"] = grouped["team"].map(TEAM_NAMES).fillna(grouped["team"])
+    grouped["opponent_name"] = grouped["opponent"].map(TEAM_NAMES).fillna(grouped["opponent"])
+    grouped.rename(columns={"game_date_iso": "game_date", "pitch_type_code": "pitch_type"}, inplace=True)
     grouped["season"] = grouped["season"].fillna(0).astype(int)
+    grouped["game_pk"] = grouped["game_pk"].fillna(0).astype(int)
     grouped["pitcher_id"] = grouped["pitcher_id"].fillna(0).astype(int)
     return grouped.to_dict(orient="records")
 
@@ -723,6 +741,7 @@ def aggregate_statcast_batter_pitch_type_games(frame) -> list[dict[str, Any]]:
         return []
     final = final[
         final["game_date_iso"].notna()
+        & final["game_pk"].notna()
         & final["batter_id"].notna()
         & final["batter_name_fmt"].ne("")
         & final["pitch_type_code"].ne("")
@@ -753,16 +772,16 @@ def aggregate_statcast_batter_pitch_type_games(frame) -> list[dict[str, Any]]:
                 "game_date_iso",
                 "game_pk",
                 "batter_id",
-                "batter_name_fmt",
-                "batting_team",
-                "pitching_team",
                 "pitch_type_code",
-                "pitch_name_fmt",
-                "pitch_family",
             ],
             dropna=False,
         )
         .agg(
+            batter_name=("batter_name_fmt", "first"),
+            team=("batting_team", "first"),
+            opponent=("pitching_team", "first"),
+            pitch_name=("pitch_name_fmt", "first"),
+            pitch_family=("pitch_family", "first"),
             plate_appearances=("plate_appearances", "sum"),
             at_bats=("at_bats", "sum"),
             hits=("hits", "sum"),
@@ -787,20 +806,11 @@ def aggregate_statcast_batter_pitch_type_games(frame) -> list[dict[str, Any]]:
         )
         .reset_index()
     )
-    grouped["team_name"] = grouped["batting_team"].map(TEAM_NAMES).fillna(grouped["batting_team"])
-    grouped["opponent_name"] = grouped["pitching_team"].map(TEAM_NAMES).fillna(grouped["pitching_team"])
-    grouped.rename(
-        columns={
-            "game_date_iso": "game_date",
-            "batter_name_fmt": "batter_name",
-            "batting_team": "team",
-            "pitching_team": "opponent",
-            "pitch_type_code": "pitch_type",
-            "pitch_name_fmt": "pitch_name",
-        },
-        inplace=True,
-    )
+    grouped["team_name"] = grouped["team"].map(TEAM_NAMES).fillna(grouped["team"])
+    grouped["opponent_name"] = grouped["opponent"].map(TEAM_NAMES).fillna(grouped["opponent"])
+    grouped.rename(columns={"game_date_iso": "game_date", "pitch_type_code": "pitch_type"}, inplace=True)
     grouped["season"] = grouped["season"].fillna(0).astype(int)
+    grouped["game_pk"] = grouped["game_pk"].fillna(0).astype(int)
     grouped["batter_id"] = grouped["batter_id"].fillna(0).astype(int)
     return grouped.to_dict(orient="records")
 
@@ -811,6 +821,9 @@ def aggregate_statcast_events(frame) -> list[dict[str, Any]]:
         return []
     final = final[
         final["game_date_iso"].notna()
+        & final["game_pk"].notna()
+        & final["at_bat_number"].notna()
+        & final["pitch_number"].notna()
         & final["batter_id"].notna()
         & final["pitcher_id"].notna()
     ].copy()

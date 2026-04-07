@@ -244,6 +244,212 @@ def test_aggregate_statcast_v2_layers() -> None:
     assert strikeout_row["has_risp"] == 1
 
 
+def test_aggregate_statcast_batter_games_collapses_name_variants() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "events": "single",
+                "description": "hit_into_play",
+                "des": "Pete Alonso singles on a line drive to right field.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "ATL",
+                "home_team": "NYM",
+                "pitcher": 101,
+                "player_name": "Sale, Chris",
+                "batter": 202,
+                "pitch_type": "FF",
+                "pitch_name": "4-Seam Fastball",
+                "release_speed": 97.5,
+                "release_spin_rate": 2450,
+                "launch_speed": 101.0,
+                "launch_angle": 18.0,
+                "estimated_ba_using_speedangle": 0.720,
+                "estimated_woba_using_speedangle": 0.650,
+                "estimated_slg_using_speedangle": 1.100,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-04",
+                "game_pk": 77777,
+                "at_bat_number": 1,
+                "pitch_number": 3,
+                "stand": "R",
+                "p_throws": "L",
+            },
+            {
+                "events": "walk",
+                "description": "ball",
+                "des": "P. Alonso walks.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "ATL",
+                "home_team": "NYM",
+                "pitcher": 101,
+                "player_name": "Sale, Chris",
+                "batter": 202,
+                "pitch_type": "SL",
+                "pitch_name": "Slider",
+                "release_speed": 86.5,
+                "release_spin_rate": 2700,
+                "launch_speed": None,
+                "launch_angle": None,
+                "estimated_ba_using_speedangle": None,
+                "estimated_woba_using_speedangle": 0.690,
+                "estimated_slg_using_speedangle": None,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-04",
+                "game_pk": 77777,
+                "at_bat_number": 2,
+                "pitch_number": 5,
+                "stand": "R",
+                "p_throws": "L",
+            },
+        ]
+    )
+
+    rows = aggregate_statcast_batter_games(frame)
+    assert len(rows) == 1
+    assert rows[0]["batter_id"] == 202
+    assert rows[0]["plate_appearances"] == 2
+    assert rows[0]["hits"] == 1
+    assert rows[0]["walks"] == 1
+
+
+def test_aggregate_statcast_batter_games_ignores_missing_game_pk_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "events": "single",
+                "description": "hit_into_play",
+                "des": "Pete Alonso singles on a line drive to right field.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "ATL",
+                "home_team": "NYM",
+                "pitcher": 101,
+                "player_name": "Sale, Chris",
+                "batter": 202,
+                "pitch_type": "FF",
+                "pitch_name": "4-Seam Fastball",
+                "release_speed": 97.5,
+                "release_spin_rate": 2450,
+                "launch_speed": 101.0,
+                "launch_angle": 18.0,
+                "estimated_ba_using_speedangle": 0.720,
+                "estimated_woba_using_speedangle": 0.650,
+                "estimated_slg_using_speedangle": 1.100,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-04",
+                "game_pk": None,
+                "at_bat_number": 1,
+                "pitch_number": 3,
+                "stand": "R",
+                "p_throws": "L",
+            },
+            {
+                "events": "home_run",
+                "description": "hit_into_play",
+                "des": "Pete Alonso homers on a fly ball to left field.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "PHI",
+                "home_team": "NYM",
+                "pitcher": 303,
+                "player_name": "Wheeler, Zack",
+                "batter": 202,
+                "pitch_type": "SL",
+                "pitch_name": "Slider",
+                "release_speed": 87.1,
+                "release_spin_rate": 2702,
+                "launch_speed": 106.4,
+                "launch_angle": 28.0,
+                "estimated_ba_using_speedangle": 0.910,
+                "estimated_woba_using_speedangle": 0.990,
+                "estimated_slg_using_speedangle": 2.000,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-05",
+                "game_pk": 88888,
+                "at_bat_number": 2,
+                "pitch_number": 4,
+                "stand": "R",
+                "p_throws": "R",
+            },
+        ]
+    )
+
+    rows = aggregate_statcast_batter_games(frame)
+    assert len(rows) == 1
+    assert rows[0]["game_pk"] == 88888
+    assert rows[0]["home_runs"] == 1
+
+
+def test_aggregate_statcast_batter_games_dedupes_duplicate_final_pitch_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "events": "single",
+                "description": "hit_into_play",
+                "des": "Pete Alonso singles on a line drive to right field.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "ATL",
+                "home_team": "NYM",
+                "pitcher": 101,
+                "player_name": "Sale, Chris",
+                "batter": 202,
+                "pitch_type": "FF",
+                "pitch_name": "4-Seam Fastball",
+                "release_speed": 97.5,
+                "release_spin_rate": 2450,
+                "launch_speed": 101.0,
+                "launch_angle": 18.0,
+                "estimated_ba_using_speedangle": 0.720,
+                "estimated_woba_using_speedangle": 0.650,
+                "estimated_slg_using_speedangle": 1.100,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-04",
+                "game_pk": 99999,
+                "at_bat_number": 1,
+                "pitch_number": 3,
+                "stand": "R",
+                "p_throws": "L",
+            },
+            {
+                "events": "single",
+                "description": "hit_into_play",
+                "des": "Pete Alonso singles on a line drive to right field.",
+                "game_type": "R",
+                "inning_topbot": "Bottom",
+                "away_team": "ATL",
+                "home_team": "NYM",
+                "pitcher": 101,
+                "player_name": "Sale, Chris",
+                "batter": 202,
+                "pitch_type": "FF",
+                "pitch_name": "4-Seam Fastball",
+                "release_speed": 97.5,
+                "release_spin_rate": 2450,
+                "launch_speed": 101.0,
+                "launch_angle": 18.0,
+                "estimated_ba_using_speedangle": 0.720,
+                "estimated_woba_using_speedangle": 0.650,
+                "estimated_slg_using_speedangle": 1.100,
+                "woba_denom": 1.0,
+                "game_date": "2026-04-04",
+                "game_pk": 99999,
+                "at_bat_number": 1,
+                "pitch_number": 3,
+                "stand": "R",
+                "p_throws": "L",
+            },
+        ]
+    )
+
+    rows = aggregate_statcast_batter_games(frame)
+    assert len(rows) == 1
+    assert rows[0]["plate_appearances"] == 1
+    assert rows[0]["hits"] == 1
+
+
 def test_resolve_daily_statcast_window_with_overlap() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
