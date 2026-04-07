@@ -185,6 +185,159 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (game_pk, pitcher_id)
         );
 
+        CREATE TABLE IF NOT EXISTS statcast_batter_games (
+            season INTEGER NOT NULL,
+            game_date TEXT NOT NULL,
+            game_pk INTEGER NOT NULL,
+            batter_id INTEGER NOT NULL,
+            batter_name TEXT NOT NULL,
+            team TEXT NOT NULL,
+            team_name TEXT NOT NULL,
+            opponent TEXT NOT NULL,
+            opponent_name TEXT NOT NULL,
+            plate_appearances INTEGER NOT NULL DEFAULT 0,
+            at_bats INTEGER NOT NULL DEFAULT 0,
+            hits INTEGER NOT NULL DEFAULT 0,
+            singles INTEGER NOT NULL DEFAULT 0,
+            doubles INTEGER NOT NULL DEFAULT 0,
+            triples INTEGER NOT NULL DEFAULT 0,
+            home_runs INTEGER NOT NULL DEFAULT 0,
+            walks INTEGER NOT NULL DEFAULT 0,
+            strikeouts INTEGER NOT NULL DEFAULT 0,
+            runs_batted_in INTEGER NOT NULL DEFAULT 0,
+            batted_ball_events INTEGER NOT NULL DEFAULT 0,
+            xba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_denom REAL NOT NULL DEFAULT 0,
+            xslg_numerator REAL NOT NULL DEFAULT 0,
+            hard_hit_bbe INTEGER NOT NULL DEFAULT 0,
+            barrel_bbe INTEGER NOT NULL DEFAULT 0,
+            launch_speed_sum REAL NOT NULL DEFAULT 0,
+            launch_speed_count INTEGER NOT NULL DEFAULT 0,
+            max_launch_speed REAL,
+            avg_bat_speed REAL,
+            max_bat_speed REAL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_pk, batter_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS statcast_pitch_type_games (
+            season INTEGER NOT NULL,
+            game_date TEXT NOT NULL,
+            game_pk INTEGER NOT NULL,
+            pitcher_id INTEGER NOT NULL,
+            pitcher_name TEXT NOT NULL,
+            team TEXT NOT NULL,
+            team_name TEXT NOT NULL,
+            opponent TEXT NOT NULL,
+            opponent_name TEXT NOT NULL,
+            pitch_type TEXT NOT NULL,
+            pitch_name TEXT NOT NULL,
+            pitch_family TEXT NOT NULL,
+            pitches INTEGER NOT NULL DEFAULT 0,
+            avg_release_speed REAL,
+            max_release_speed REAL,
+            avg_release_spin_rate REAL,
+            max_release_spin_rate REAL,
+            called_strikes INTEGER NOT NULL DEFAULT 0,
+            swinging_strikes INTEGER NOT NULL DEFAULT 0,
+            whiffs INTEGER NOT NULL DEFAULT 0,
+            strikeouts INTEGER NOT NULL DEFAULT 0,
+            walks INTEGER NOT NULL DEFAULT 0,
+            hits_allowed INTEGER NOT NULL DEFAULT 0,
+            extra_base_hits_allowed INTEGER NOT NULL DEFAULT 0,
+            home_runs_allowed INTEGER NOT NULL DEFAULT 0,
+            batted_ball_events INTEGER NOT NULL DEFAULT 0,
+            xba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_denom REAL NOT NULL DEFAULT 0,
+            xslg_numerator REAL NOT NULL DEFAULT 0,
+            launch_speed_sum REAL NOT NULL DEFAULT 0,
+            launch_speed_count INTEGER NOT NULL DEFAULT 0,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_pk, pitcher_id, pitch_type)
+        );
+
+        CREATE TABLE IF NOT EXISTS statcast_batter_pitch_type_games (
+            season INTEGER NOT NULL,
+            game_date TEXT NOT NULL,
+            game_pk INTEGER NOT NULL,
+            batter_id INTEGER NOT NULL,
+            batter_name TEXT NOT NULL,
+            team TEXT NOT NULL,
+            team_name TEXT NOT NULL,
+            opponent TEXT NOT NULL,
+            opponent_name TEXT NOT NULL,
+            pitch_type TEXT NOT NULL,
+            pitch_name TEXT NOT NULL,
+            pitch_family TEXT NOT NULL,
+            plate_appearances INTEGER NOT NULL DEFAULT 0,
+            at_bats INTEGER NOT NULL DEFAULT 0,
+            hits INTEGER NOT NULL DEFAULT 0,
+            singles INTEGER NOT NULL DEFAULT 0,
+            doubles INTEGER NOT NULL DEFAULT 0,
+            triples INTEGER NOT NULL DEFAULT 0,
+            home_runs INTEGER NOT NULL DEFAULT 0,
+            walks INTEGER NOT NULL DEFAULT 0,
+            strikeouts INTEGER NOT NULL DEFAULT 0,
+            runs_batted_in INTEGER NOT NULL DEFAULT 0,
+            batted_ball_events INTEGER NOT NULL DEFAULT 0,
+            xba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_numerator REAL NOT NULL DEFAULT 0,
+            xwoba_denom REAL NOT NULL DEFAULT 0,
+            xslg_numerator REAL NOT NULL DEFAULT 0,
+            hard_hit_bbe INTEGER NOT NULL DEFAULT 0,
+            barrel_bbe INTEGER NOT NULL DEFAULT 0,
+            launch_speed_sum REAL NOT NULL DEFAULT 0,
+            launch_speed_count INTEGER NOT NULL DEFAULT 0,
+            avg_bat_speed REAL,
+            max_bat_speed REAL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_pk, batter_id, pitch_type)
+        );
+
+        CREATE TABLE IF NOT EXISTS statcast_events (
+            season INTEGER NOT NULL,
+            game_date TEXT NOT NULL,
+            game_pk INTEGER NOT NULL,
+            at_bat_number INTEGER NOT NULL,
+            pitch_number INTEGER NOT NULL,
+            batter_id INTEGER NOT NULL,
+            batter_name TEXT NOT NULL,
+            pitcher_id INTEGER NOT NULL,
+            pitcher_name TEXT NOT NULL,
+            batting_team TEXT NOT NULL,
+            pitching_team TEXT NOT NULL,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            stand TEXT NOT NULL DEFAULT '',
+            p_throws TEXT NOT NULL DEFAULT '',
+            pitch_type TEXT NOT NULL DEFAULT '',
+            pitch_name TEXT NOT NULL DEFAULT '',
+            pitch_family TEXT NOT NULL DEFAULT '',
+            event TEXT NOT NULL DEFAULT '',
+            is_ab INTEGER NOT NULL DEFAULT 0,
+            is_hit INTEGER NOT NULL DEFAULT 0,
+            is_xbh INTEGER NOT NULL DEFAULT 0,
+            is_home_run INTEGER NOT NULL DEFAULT 0,
+            is_strikeout INTEGER NOT NULL DEFAULT 0,
+            has_risp INTEGER NOT NULL DEFAULT 0,
+            horizontal_location TEXT NOT NULL DEFAULT '',
+            vertical_location TEXT NOT NULL DEFAULT '',
+            field_direction TEXT NOT NULL DEFAULT '',
+            release_speed REAL,
+            release_spin_rate REAL,
+            launch_speed REAL,
+            launch_angle REAL,
+            hit_distance REAL,
+            bat_speed REAL,
+            estimated_ba REAL,
+            estimated_woba REAL,
+            estimated_slg REAL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_pk, at_bat_number, pitch_number)
+        );
+
         CREATE TABLE IF NOT EXISTS retrosheet_team_split_games (
             season INTEGER NOT NULL,
             game_date TEXT NOT NULL,
@@ -300,6 +453,39 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_statcast_pitcher_games_team
         ON statcast_pitcher_games (team, season, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_batter_games_season_date
+        ON statcast_batter_games (season, game_date, batter_id);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_batter_games_batter
+        ON statcast_batter_games (batter_id, season, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_batter_games_team
+        ON statcast_batter_games (team, season, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_pitch_type_games_season_pitcher
+        ON statcast_pitch_type_games (season, pitcher_id, pitch_family, pitch_type, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_pitch_type_games_team
+        ON statcast_pitch_type_games (team, season, pitch_family, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_batter_pitch_type_games_season_batter
+        ON statcast_batter_pitch_type_games (season, batter_id, pitch_family, pitch_type, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_batter_pitch_type_games_team
+        ON statcast_batter_pitch_type_games (team, season, pitch_family, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_events_season_date
+        ON statcast_events (season, game_date, event);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_events_batter
+        ON statcast_events (batter_id, season, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_events_pitcher
+        ON statcast_events (pitcher_id, season, game_date);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_events_filters
+        ON statcast_events (pitch_family, event, horizontal_location, vertical_location, field_direction, home_team, season);
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_team_split_games_lookup
         ON retrosheet_team_split_games (split_key, season, game_date, team);
@@ -778,6 +964,413 @@ def replace_statcast_pitcher_games(
                 slider_pitches,
                 slider_strikeouts
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized_rows,
+        )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def replace_statcast_batter_games(
+    connection: sqlite3.Connection,
+    *,
+    start_date: str,
+    end_date: str,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            _coerce_int(row.get("season")),
+            str(row.get("game_date") or ""),
+            _coerce_int(row.get("game_pk")),
+            _coerce_int(row.get("batter_id")),
+            str(row.get("batter_name") or "").strip(),
+            str(row.get("team") or "").strip(),
+            str(row.get("team_name") or row.get("team") or "").strip(),
+            str(row.get("opponent") or "").strip(),
+            str(row.get("opponent_name") or row.get("opponent") or "").strip(),
+            _coerce_int(row.get("plate_appearances")),
+            _coerce_int(row.get("at_bats")),
+            _coerce_int(row.get("hits")),
+            _coerce_int(row.get("singles")),
+            _coerce_int(row.get("doubles")),
+            _coerce_int(row.get("triples")),
+            _coerce_int(row.get("home_runs")),
+            _coerce_int(row.get("walks")),
+            _coerce_int(row.get("strikeouts")),
+            _coerce_int(row.get("runs_batted_in")),
+            _coerce_int(row.get("batted_ball_events")),
+            float(row.get("xba_numerator") or 0.0),
+            float(row.get("xwoba_numerator") or 0.0),
+            float(row.get("xwoba_denom") or 0.0),
+            float(row.get("xslg_numerator") or 0.0),
+            _coerce_int(row.get("hard_hit_bbe")),
+            _coerce_int(row.get("barrel_bbe")),
+            float(row.get("launch_speed_sum") or 0.0),
+            _coerce_int(row.get("launch_speed_count")),
+            _coerce_float(row.get("max_launch_speed")),
+            _coerce_float(row.get("avg_bat_speed")),
+            _coerce_float(row.get("max_bat_speed")),
+        )
+        for row in rows
+        if str(row.get("game_date") or "").strip()
+        and _coerce_int(row.get("batter_id"))
+        and str(row.get("batter_name") or "").strip()
+    ]
+    connection.execute(
+        """
+        DELETE FROM statcast_batter_games
+        WHERE game_date >= ? AND game_date <= ?
+        """,
+        (start_date, end_date),
+    )
+    if normalized_rows:
+        connection.executemany(
+            """
+            INSERT INTO statcast_batter_games (
+                season,
+                game_date,
+                game_pk,
+                batter_id,
+                batter_name,
+                team,
+                team_name,
+                opponent,
+                opponent_name,
+                plate_appearances,
+                at_bats,
+                hits,
+                singles,
+                doubles,
+                triples,
+                home_runs,
+                walks,
+                strikeouts,
+                runs_batted_in,
+                batted_ball_events,
+                xba_numerator,
+                xwoba_numerator,
+                xwoba_denom,
+                xslg_numerator,
+                hard_hit_bbe,
+                barrel_bbe,
+                launch_speed_sum,
+                launch_speed_count,
+                max_launch_speed,
+                avg_bat_speed,
+                max_bat_speed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized_rows,
+        )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def replace_statcast_pitch_type_games(
+    connection: sqlite3.Connection,
+    *,
+    start_date: str,
+    end_date: str,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            _coerce_int(row.get("season")),
+            str(row.get("game_date") or ""),
+            _coerce_int(row.get("game_pk")),
+            _coerce_int(row.get("pitcher_id")),
+            str(row.get("pitcher_name") or "").strip(),
+            str(row.get("team") or "").strip(),
+            str(row.get("team_name") or row.get("team") or "").strip(),
+            str(row.get("opponent") or "").strip(),
+            str(row.get("opponent_name") or row.get("opponent") or "").strip(),
+            str(row.get("pitch_type") or "").strip(),
+            str(row.get("pitch_name") or "").strip(),
+            str(row.get("pitch_family") or "").strip(),
+            _coerce_int(row.get("pitches")),
+            _coerce_float(row.get("avg_release_speed")),
+            _coerce_float(row.get("max_release_speed")),
+            _coerce_float(row.get("avg_release_spin_rate")),
+            _coerce_float(row.get("max_release_spin_rate")),
+            _coerce_int(row.get("called_strikes")),
+            _coerce_int(row.get("swinging_strikes")),
+            _coerce_int(row.get("whiffs")),
+            _coerce_int(row.get("strikeouts")),
+            _coerce_int(row.get("walks")),
+            _coerce_int(row.get("hits_allowed")),
+            _coerce_int(row.get("extra_base_hits_allowed")),
+            _coerce_int(row.get("home_runs_allowed")),
+            _coerce_int(row.get("batted_ball_events")),
+            float(row.get("xba_numerator") or 0.0),
+            float(row.get("xwoba_numerator") or 0.0),
+            float(row.get("xwoba_denom") or 0.0),
+            float(row.get("xslg_numerator") or 0.0),
+            float(row.get("launch_speed_sum") or 0.0),
+            _coerce_int(row.get("launch_speed_count")),
+        )
+        for row in rows
+        if str(row.get("game_date") or "").strip()
+        and _coerce_int(row.get("pitcher_id"))
+        and str(row.get("pitch_type") or "").strip()
+    ]
+    connection.execute(
+        """
+        DELETE FROM statcast_pitch_type_games
+        WHERE game_date >= ? AND game_date <= ?
+        """,
+        (start_date, end_date),
+    )
+    if normalized_rows:
+        connection.executemany(
+            """
+            INSERT INTO statcast_pitch_type_games (
+                season,
+                game_date,
+                game_pk,
+                pitcher_id,
+                pitcher_name,
+                team,
+                team_name,
+                opponent,
+                opponent_name,
+                pitch_type,
+                pitch_name,
+                pitch_family,
+                pitches,
+                avg_release_speed,
+                max_release_speed,
+                avg_release_spin_rate,
+                max_release_spin_rate,
+                called_strikes,
+                swinging_strikes,
+                whiffs,
+                strikeouts,
+                walks,
+                hits_allowed,
+                extra_base_hits_allowed,
+                home_runs_allowed,
+                batted_ball_events,
+                xba_numerator,
+                xwoba_numerator,
+                xwoba_denom,
+                xslg_numerator,
+                launch_speed_sum,
+                launch_speed_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized_rows,
+        )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def replace_statcast_batter_pitch_type_games(
+    connection: sqlite3.Connection,
+    *,
+    start_date: str,
+    end_date: str,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            _coerce_int(row.get("season")),
+            str(row.get("game_date") or ""),
+            _coerce_int(row.get("game_pk")),
+            _coerce_int(row.get("batter_id")),
+            str(row.get("batter_name") or "").strip(),
+            str(row.get("team") or "").strip(),
+            str(row.get("team_name") or row.get("team") or "").strip(),
+            str(row.get("opponent") or "").strip(),
+            str(row.get("opponent_name") or row.get("opponent") or "").strip(),
+            str(row.get("pitch_type") or "").strip(),
+            str(row.get("pitch_name") or "").strip(),
+            str(row.get("pitch_family") or "").strip(),
+            _coerce_int(row.get("plate_appearances")),
+            _coerce_int(row.get("at_bats")),
+            _coerce_int(row.get("hits")),
+            _coerce_int(row.get("singles")),
+            _coerce_int(row.get("doubles")),
+            _coerce_int(row.get("triples")),
+            _coerce_int(row.get("home_runs")),
+            _coerce_int(row.get("walks")),
+            _coerce_int(row.get("strikeouts")),
+            _coerce_int(row.get("runs_batted_in")),
+            _coerce_int(row.get("batted_ball_events")),
+            float(row.get("xba_numerator") or 0.0),
+            float(row.get("xwoba_numerator") or 0.0),
+            float(row.get("xwoba_denom") or 0.0),
+            float(row.get("xslg_numerator") or 0.0),
+            _coerce_int(row.get("hard_hit_bbe")),
+            _coerce_int(row.get("barrel_bbe")),
+            float(row.get("launch_speed_sum") or 0.0),
+            _coerce_int(row.get("launch_speed_count")),
+            _coerce_float(row.get("avg_bat_speed")),
+            _coerce_float(row.get("max_bat_speed")),
+        )
+        for row in rows
+        if str(row.get("game_date") or "").strip()
+        and _coerce_int(row.get("batter_id"))
+        and str(row.get("pitch_type") or "").strip()
+    ]
+    connection.execute(
+        """
+        DELETE FROM statcast_batter_pitch_type_games
+        WHERE game_date >= ? AND game_date <= ?
+        """,
+        (start_date, end_date),
+    )
+    if normalized_rows:
+        connection.executemany(
+            """
+            INSERT INTO statcast_batter_pitch_type_games (
+                season,
+                game_date,
+                game_pk,
+                batter_id,
+                batter_name,
+                team,
+                team_name,
+                opponent,
+                opponent_name,
+                pitch_type,
+                pitch_name,
+                pitch_family,
+                plate_appearances,
+                at_bats,
+                hits,
+                singles,
+                doubles,
+                triples,
+                home_runs,
+                walks,
+                strikeouts,
+                runs_batted_in,
+                batted_ball_events,
+                xba_numerator,
+                xwoba_numerator,
+                xwoba_denom,
+                xslg_numerator,
+                hard_hit_bbe,
+                barrel_bbe,
+                launch_speed_sum,
+                launch_speed_count,
+                avg_bat_speed,
+                max_bat_speed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized_rows,
+        )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def replace_statcast_events(
+    connection: sqlite3.Connection,
+    *,
+    start_date: str,
+    end_date: str,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            _coerce_int(row.get("season")),
+            str(row.get("game_date") or ""),
+            _coerce_int(row.get("game_pk")),
+            _coerce_int(row.get("at_bat_number")),
+            _coerce_int(row.get("pitch_number")),
+            _coerce_int(row.get("batter_id")),
+            str(row.get("batter_name") or "").strip(),
+            _coerce_int(row.get("pitcher_id")),
+            str(row.get("pitcher_name") or "").strip(),
+            str(row.get("batting_team") or "").strip(),
+            str(row.get("pitching_team") or "").strip(),
+            str(row.get("home_team") or "").strip(),
+            str(row.get("away_team") or "").strip(),
+            str(row.get("stand") or "").strip(),
+            str(row.get("p_throws") or "").strip(),
+            str(row.get("pitch_type") or "").strip(),
+            str(row.get("pitch_name") or "").strip(),
+            str(row.get("pitch_family") or "").strip(),
+            str(row.get("event") or "").strip(),
+            _coerce_int(row.get("is_ab")),
+            _coerce_int(row.get("is_hit")),
+            _coerce_int(row.get("is_xbh")),
+            _coerce_int(row.get("is_home_run")),
+            _coerce_int(row.get("is_strikeout")),
+            _coerce_int(row.get("has_risp")),
+            str(row.get("horizontal_location") or "").strip(),
+            str(row.get("vertical_location") or "").strip(),
+            str(row.get("field_direction") or "").strip(),
+            _coerce_float(row.get("release_speed")),
+            _coerce_float(row.get("release_spin_rate")),
+            _coerce_float(row.get("launch_speed")),
+            _coerce_float(row.get("launch_angle")),
+            _coerce_float(row.get("hit_distance")),
+            _coerce_float(row.get("bat_speed")),
+            _coerce_float(row.get("estimated_ba")),
+            _coerce_float(row.get("estimated_woba")),
+            _coerce_float(row.get("estimated_slg")),
+        )
+        for row in rows
+        if str(row.get("game_date") or "").strip()
+        and _coerce_int(row.get("game_pk")) is not None
+        and _coerce_int(row.get("at_bat_number")) is not None
+        and _coerce_int(row.get("pitch_number")) is not None
+    ]
+    connection.execute(
+        """
+        DELETE FROM statcast_events
+        WHERE game_date >= ? AND game_date <= ?
+        """,
+        (start_date, end_date),
+    )
+    if normalized_rows:
+        connection.executemany(
+            """
+            INSERT INTO statcast_events (
+                season,
+                game_date,
+                game_pk,
+                at_bat_number,
+                pitch_number,
+                batter_id,
+                batter_name,
+                pitcher_id,
+                pitcher_name,
+                batting_team,
+                pitching_team,
+                home_team,
+                away_team,
+                stand,
+                p_throws,
+                pitch_type,
+                pitch_name,
+                pitch_family,
+                event,
+                is_ab,
+                is_hit,
+                is_xbh,
+                is_home_run,
+                is_strikeout,
+                has_risp,
+                horizontal_location,
+                vertical_location,
+                field_direction,
+                release_speed,
+                release_spin_rate,
+                launch_speed,
+                launch_angle,
+                hit_distance,
+                bat_speed,
+                estimated_ba,
+                estimated_woba,
+                estimated_slg
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized_rows,
         )

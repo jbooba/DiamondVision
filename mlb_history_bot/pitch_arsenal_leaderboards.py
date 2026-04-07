@@ -12,6 +12,7 @@ from .provider_metrics import extract_team_filter, normalize_team_value
 from .pybaseball_adapter import load_statcast_pitcher_arsenal_stats, load_statcast_pitcher_pitch_arsenal
 from .query_intent import detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
 from .query_utils import extract_referenced_season
+from .storage import get_connection, table_exists
 
 
 HISTORICAL_HINTS = ("historically", "statcast era", "all time", "all-time", "ever")
@@ -105,7 +106,7 @@ class PitchArsenalLeaderboardResearcher:
         query = parse_pitch_arsenal_query(question, current_season)
         if query is None:
             return None
-        leaders = run_pitch_arsenal_query(query)
+        leaders = run_pitch_arsenal_query(self.settings, query)
         if not leaders:
             return None
         mode = "live" if query.mode == "live" else "historical"
@@ -211,7 +212,10 @@ def extract_minimum_pitches(lowered_question: str) -> int | None:
     return None
 
 
-def run_pitch_arsenal_query(query: PitchArsenalQuery) -> list[dict[str, Any]]:
+def run_pitch_arsenal_query(settings: Settings, query: PitchArsenalQuery) -> list[dict[str, Any]]:
+    local_leaders = run_local_pitch_arsenal_query(settings, query)
+    if local_leaders:
+        return local_leaders
     leaders: list[dict[str, Any]] = []
     for season in range(query.start_season, query.end_season + 1):
         rows = load_pitch_arsenal_rows(season, query.metric.arsenal_type, query.min_pitches)
@@ -237,6 +241,91 @@ def run_pitch_arsenal_query(query: PitchArsenalQuery) -> list[dict[str, Any]]:
     for index, row in enumerate(top_rows, start=1):
         row["rank"] = index
     return top_rows[:5]
+
+
+def run_local_pitch_arsenal_query(settings: Settings, query: PitchArsenalQuery) -> list[dict[str, Any]]:
+    connection = get_connection(settings.database_path)
+    try:
+        if not table_exists(connection, "statcast_pitch_type_games"):
+            return []
+        where_clause, params = build_local_pitch_type_filter(query)
+        metric_sql = "AVG(avg_release_spin_rate)" if query.metric.key == "avg_spin" else "AVG(avg_release_speed)"
+        rows = connection.execute(
+            f"""
+            SELECT
+                pitcher_id AS player_id,
+                pitcher_name,
+                team,
+                pitch_type,
+                MIN(pitch_name) AS pitch_label,
+                {metric_sql} AS metric_value,
+                SUM(pitches) AS pitch_count
+            FROM statcast_pitch_type_games
+            WHERE {where_clause}
+            GROUP BY pitcher_id, pitcher_name, team, pitch_type
+            HAVING SUM(pitches) >= ?
+               AND {metric_sql} IS NOT NULL
+            ORDER BY metric_value {"DESC" if query.sort_desc else "ASC"}, pitch_count DESC, pitcher_name ASC
+            LIMIT 8
+            """,
+            (*params, query.min_pitches),
+        ).fetchall()
+    finally:
+        connection.close()
+    leaders = [
+        {
+            "pitcher_name": str(row["pitcher_name"]),
+            "player_id": safe_int(row["player_id"]),
+            "team": normalize_team_value(row["team"]),
+            "season": query.start_season if query.start_season == query.end_season else None,
+            "pitch_label": str(row["pitch_label"] or ""),
+            "pitch_type": str(row["pitch_type"] or ""),
+            "metric_value": safe_float(row["metric_value"]),
+            "pitch_count": safe_int(row["pitch_count"]),
+        }
+        for row in rows
+    ]
+    for index, row in enumerate(leaders, start=1):
+        row["rank"] = index
+    return leaders[:5]
+
+
+def build_local_pitch_type_filter(query: PitchArsenalQuery) -> tuple[str, list[Any]]:
+    clauses = ["season >= ?", "season <= ?"]
+    params: list[Any] = [query.start_season, query.end_season]
+    family_clause, family_params = pitch_family_sql_filter(query.pitch_family)
+    clauses.append(family_clause)
+    params.extend(family_params)
+    if query.team_filter:
+        clauses.append("team = ?")
+        params.append(query.team_filter)
+    return " AND ".join(clauses), params
+
+
+def pitch_family_sql_filter(family: PitchFamilySpec) -> tuple[str, list[Any]]:
+    if family.key == "slider":
+        return "(pitch_family = ?)", ["slider"]
+    if family.key == "curveball":
+        return "(pitch_family = ?)", ["curveball"]
+    if family.key == "changeup":
+        return "(pitch_family = ?)", ["changeup"]
+    if family.key == "fastball":
+        return "(pitch_family = ?)", ["fastball"]
+    if family.key == "sweeper":
+        return "(pitch_type = ?)", ["ST"]
+    if family.key == "slurve":
+        return "(pitch_type = ?)", ["SV"]
+    if family.key == "splitter":
+        return "(pitch_type = ?)", ["FS"]
+    if family.key == "four_seam":
+        return "(pitch_type = ?)", ["FF"]
+    if family.key == "sinker":
+        return "(pitch_type = ?)", ["SI"]
+    if family.key == "cutter":
+        return "(pitch_type = ?)", ["FC"]
+    if family.key == "knuckleball":
+        return "(pitch_type = ?)", ["KN"]
+    return "(pitch_family = ?)", [family.key]
 
 
 def load_pitch_arsenal_rows(season: int, arsenal_type: str, min_pitches: int) -> list[dict[str, Any]]:

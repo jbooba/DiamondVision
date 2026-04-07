@@ -262,6 +262,9 @@ def run_statcast_relationship_query(
     precomputed_rows = run_precomputed_statcast_relationship_query(settings, query)
     if precomputed_rows is not None:
         return precomputed_rows
+    local_rows = run_local_statcast_relationship_query(settings, query, live_client=live_client)
+    if local_rows is not None:
+        return local_rows
     fast_rows = run_fast_statcast_relationship_query(settings, query)
     if fast_rows is not None:
         return fast_rows
@@ -289,6 +292,131 @@ def run_statcast_relationship_query(
         reverse=True,
     )
     return event_rows[:12]
+
+
+def run_local_statcast_relationship_query(
+    settings: Settings,
+    query: StatcastRelationshipQuery,
+    *,
+    live_client: LiveStatsClient | None = None,
+) -> list[dict[str, Any]] | None:
+    connection = get_connection(settings.database_path)
+    try:
+        if not table_exists(connection, "statcast_events"):
+            return None
+        return query_local_statcast_events(connection, query, live_client=live_client)
+    finally:
+        connection.close()
+
+
+def query_local_statcast_events(
+    connection,
+    query: StatcastRelationshipQuery,
+    *,
+    live_client: LiveStatsClient | None = None,
+) -> list[dict[str, Any]]:
+    batter_ids = resolve_person_ids(live_client, query.batter_filter)
+    pitcher_ids = resolve_person_ids(live_client, query.pitcher_filter)
+    where_clause, params = build_local_event_filters(query, batter_ids=batter_ids, pitcher_ids=pitcher_ids)
+    rows = connection.execute(
+        f"""
+        SELECT
+            game_pk,
+            at_bat_number,
+            pitch_number,
+            batter_id,
+            batter_name AS batter,
+            pitcher_id,
+            pitcher_name AS pitcher,
+            game_date,
+            away_team || ' @ ' || home_team AS team_matchup,
+            pitch_name,
+            event,
+            batter_name || ' ' || REPLACE(event, '_', ' ') || ' on a ' || pitch_name AS description,
+            release_speed,
+            release_spin_rate,
+            launch_speed,
+            launch_angle,
+            hit_distance,
+            CASE
+                WHEN ? = 'release_speed' THEN release_speed
+                WHEN ? = 'release_spin_rate' THEN release_spin_rate
+                ELSE COALESCE(launch_speed, release_speed, release_spin_rate, hit_distance)
+            END AS metric_value
+        FROM statcast_events
+        WHERE {where_clause}
+        """,
+        (query.metric_threshold_key, query.metric_threshold_key, *params),
+    ).fetchall()
+    event_rows = [dict(row) for row in rows if row["metric_value"] is not None or query.aggregate_by == "pitcher"]
+    if not event_rows:
+        return []
+    if query.aggregate_by == "pitcher":
+        aggregate_rows = aggregate_by_pitcher(event_rows)
+        aggregate_rows.sort(key=lambda row: (row["count"], row.get("top_metric") or 0.0), reverse=True)
+        return aggregate_rows[:8]
+    event_rows.sort(
+        key=lambda row: (
+            row.get("metric_value") if row.get("metric_value") is not None else float("-inf"),
+            row.get("game_date") or "",
+        ),
+        reverse=True,
+    )
+    return event_rows[:12]
+
+
+def build_local_event_filters(
+    query: StatcastRelationshipQuery,
+    *,
+    batter_ids: set[int] | None = None,
+    pitcher_ids: set[int] | None = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if query.start_date is not None and query.end_date is not None:
+        clauses.append("game_date >= ? AND game_date <= ?")
+        params.extend([query.start_date.isoformat(), query.end_date.isoformat()])
+    else:
+        if query.start_season is not None:
+            clauses.append("season >= ?")
+            params.append(query.start_season)
+        if query.end_season is not None:
+            clauses.append("season <= ?")
+            params.append(query.end_season)
+    if query.pitch_family:
+        clauses.append("pitch_family = ?")
+        params.append(query.pitch_family)
+    if query.event_filter:
+        placeholders = ", ".join("?" for _ in query.event_filter)
+        clauses.append(f"event IN ({placeholders})")
+        params.extend(sorted(query.event_filter))
+    if query.metric_threshold_key == "release_speed" and query.metric_threshold_value is not None:
+        clauses.append("release_speed > ?")
+        params.append(float(query.metric_threshold_value))
+    if query.metric_threshold_key == "release_spin_rate" and query.metric_threshold_value is not None:
+        clauses.append("release_spin_rate > ?")
+        params.append(float(query.metric_threshold_value))
+    if query.horizontal_location:
+        clauses.append("horizontal_location = ?")
+        params.append(query.horizontal_location)
+    if query.vertical_location:
+        clauses.append("vertical_location = ?")
+        params.append(query.vertical_location)
+    if batter_ids:
+        placeholders = ", ".join("?" for _ in batter_ids)
+        clauses.append(f"batter_id IN ({placeholders})")
+        params.extend(sorted(batter_ids))
+    elif query.batter_filter:
+        clauses.append("LOWER(batter_name) = ?")
+        params.append(normalize_name(query.batter_filter))
+    if pitcher_ids:
+        placeholders = ", ".join("?" for _ in pitcher_ids)
+        clauses.append(f"pitcher_id IN ({placeholders})")
+        params.extend(sorted(pitcher_ids))
+    elif query.pitcher_filter:
+        clauses.append("LOWER(pitcher_name) = ?")
+        params.append(normalize_name(query.pitcher_filter))
+    return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
 def run_precomputed_statcast_relationship_query(

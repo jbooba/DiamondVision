@@ -6,6 +6,7 @@ Separate project for an MLB-only chatbot that blends:
 - Exact season-level DRS leaderboards from Fielding Bible / Sports Info Solutions
 - Public Statcast team-game aggregates for expected-metric and batted-ball window queries
 - Public Statcast pitcher-game relationship aggregates for fast threshold-count and pitch-type strikeout queries
+- Compact Statcast event and pitch-type summary tables for broader player, pitch, location, and park/direction research
 - Retrosheet play-by-play situational split aggregates for questions like BA/OBP/SLG/OPS with RISP through a game window
 - Sabermetric definitions and formula notes from a curated baseball-only catalog
 - Clip-aware play lookup using Baseball Savant sporty-video pages plus MLB game feeds
@@ -141,6 +142,13 @@ python -m mlb_history_bot sync-statcast --start-date 2026-03-27 --end-date 2026-
 ```
 
 `sync-statcast` now stores both team-game expected-metric rows and pitcher-game relationship summary rows. If you want older heavy Statcast aggregate queries to become instant locally, rerun `sync-statcast` for the seasons you care about so those pitcher summaries are backfilled too.
+
+The current Statcast sync also writes:
+
+- `statcast_batter_games`: per-batter game summaries for outcome and contact-quality windows
+- `statcast_pitch_type_games`: per-pitcher, per-game, per-pitch-type summaries for velo/spin/whiff/outcome queries
+- `statcast_batter_pitch_type_games`: per-batter, per-game, per-pitch-type summaries for batter-vs-pitch-family questions
+- `statcast_events`: a compact final-pitch event index for park, direction, location, batter, pitcher, and pitch-family filters
 
 For a lightweight daily refresh of the current season with a small overlap for corrections:
 

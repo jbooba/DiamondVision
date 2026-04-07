@@ -12,6 +12,7 @@ from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent, mentions_current_scope
 from .pybaseball_adapter import load_statcast_range
 from .query_utils import extract_date_window, extract_referenced_season, question_mentions_explicit_year
+from .storage import table_exists
 from .statcast_sync import TEAM_NAMES, iter_sync_chunks, resolve_statcast_sync_windows
 
 
@@ -265,6 +266,9 @@ def team_name_to_statcast_code(team_name: str) -> str | None:
 
 
 def scan_statcast_events(settings: Settings, query: StatcastEventQuery, park_filter: str | None) -> list[dict[str, Any]]:
+    local_rows = scan_local_statcast_events(settings, query, park_filter)
+    if local_rows is not None:
+        return local_rows
     rows: list[dict[str, Any]] = []
     windows = resolve_event_windows(settings, query)
     for window in windows:
@@ -280,6 +284,78 @@ def scan_statcast_events(settings: Settings, query: StatcastEventQuery, park_fil
         rows = aggregate_player_rows(rows, query.metric.key)
     rows.sort(key=lambda row: sortable_metric_value(row["metric_value"]), reverse=query.sort_desc)
     return rows[:5]
+
+
+def scan_local_statcast_events(settings: Settings, query: StatcastEventQuery, park_filter: str | None) -> list[dict[str, Any]] | None:
+    import sqlite3
+
+    connection = sqlite3.connect(settings.database_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        if not table_exists(connection, "statcast_events"):
+            return None
+        where_clause, params = build_local_event_filters(query, park_filter)
+        rows = connection.execute(
+            f"""
+            SELECT
+                batter_name AS player_name,
+                game_date,
+                away_team || ' @ ' || home_team AS team_matchup,
+                event,
+                home_team,
+                away_team,
+                hit_distance,
+                launch_angle,
+                bat_speed,
+                launch_speed AS exit_velocity,
+                CASE
+                    WHEN ? = 'launch_speed' THEN launch_speed
+                    WHEN ? = 'bat_speed' THEN bat_speed
+                    ELSE NULL
+                END AS metric_value
+            FROM statcast_events
+            WHERE {where_clause}
+            """,
+            (query.metric.key, query.metric.key, *params),
+        ).fetchall()
+    finally:
+        connection.close()
+    filtered = [dict(row) for row in rows if row["metric_value"] is not None]
+    if not filtered:
+        return []
+    if query.wants_player_aggregation:
+        filtered = aggregate_player_rows(filtered, query.metric.key)
+    filtered.sort(key=lambda row: sortable_metric_value(row["metric_value"]), reverse=query.sort_desc)
+    return filtered[:5]
+
+
+def build_local_event_filters(query: StatcastEventQuery, park_filter: str | None) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if query.start_date is not None and query.end_date is not None:
+        clauses.append("game_date >= ? AND game_date <= ?")
+        params.extend([query.start_date.isoformat(), query.end_date.isoformat()])
+    else:
+        if query.start_season is not None:
+            clauses.append("season >= ?")
+            params.append(query.start_season)
+        if query.end_season is not None:
+            clauses.append("season <= ?")
+            params.append(query.end_season)
+    if query.event_filter:
+        clauses.append("event = ?")
+        params.append(query.event_filter)
+    if query.split_key == "risp":
+        clauses.append("has_risp = 1")
+    if query.direction_filter:
+        clauses.append("field_direction = ?")
+        params.append(query.direction_filter)
+    if park_filter:
+        clauses.append("home_team = ?")
+        params.append(park_filter)
+    metric_column = "launch_speed" if query.metric.key == "launch_speed" else "bat_speed"
+    clauses.append(f"{metric_column} IS NOT NULL")
+    return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
 def resolve_event_windows(settings: Settings, query: StatcastEventQuery):
