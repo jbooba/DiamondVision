@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DiamondVision 64</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-top: #0c1813;
+      --bg-mid: #163628;
+      --bg-bottom: #2d6b4d;
+      --panel: rgba(8, 18, 14, 0.9);
+      --panel-soft: rgba(15, 34, 27, 0.9);
+      --line: rgba(255, 234, 189, 0.14);
+      --glow: #85ffbf;
+      --text: #f6efd7;
+      --muted: rgba(246, 239, 215, 0.72);
+      --accent: #ff9e57;
+      --accent-soft: rgba(255, 158, 87, 0.14);
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "IBM Plex Mono", monospace;
+      background:
+        radial-gradient(circle at top, rgba(255, 182, 115, 0.18), transparent 28%),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 2px, transparent 2px 100%),
+        linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 2px, transparent 2px 100%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 24%, var(--bg-bottom) 100%);
+      background-size: auto, 44px 44px, 44px 44px, auto;
+    }
+
+    .shell { max-width: 1520px; margin: 0 auto; padding: 24px 18px 32px; display: grid; gap: 18px; }
+    .hero, .workbench { display: grid; gap: 16px; }
+    .hero { grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr); }
+    .workbench { grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr); }
+
+    .panel, .masthead, .status-board {
+      border: 3px solid rgba(216, 210, 196, 0.24);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      background: linear-gradient(180deg, rgba(8, 18, 14, 0.96), rgba(15, 34, 27, 0.94));
+    }
+
+    .masthead { padding: 28px; position: relative; }
+    .masthead::after {
+      content: "";
+      position: absolute;
+      right: 18px;
+      bottom: -24px;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(133, 255, 191, 0.2), transparent 68%);
+      filter: blur(8px);
+    }
+
+    .eyebrow, .panel-label, .prompt-chip, .tab, .score-label, .queue-index {
+      font-family: "Press Start 2P", monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow { font-size: 0.72rem; color: #ffd6a7; margin-bottom: 12px; }
+    h1 { margin: 0; font-family: "Press Start 2P", monospace; font-size: clamp(1.6rem, 3.1vw, 3rem); line-height: 1.15; }
+    .subhead { margin-top: 12px; max-width: 840px; line-height: 1.72; color: var(--muted); }
+    .hero-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+
+    .prompt-chip, .action, .queue-card, .tab {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: inherit;
+    }
+
+    .prompt-chip {
+      border-radius: 999px;
+      padding: 10px 12px;
+      min-width: 0;
+      font-size: 0.6rem;
+      color: #ffe6bb;
+      cursor: pointer;
+      box-shadow: none;
+    }
+
+    .status-board { padding: 20px; display: grid; gap: 14px; align-content: start; }
+    .score-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .score-card { border: 1px solid rgba(133, 255, 191, 0.16); border-radius: 18px; background: rgba(133, 255, 191, 0.05); padding: 14px; }
+    .score-label { display: block; font-size: 0.56rem; color: rgba(133, 255, 191, 0.72); margin-bottom: 10px; }
+    .score-value { font-size: 1.3rem; font-weight: 700; color: var(--glow); }
+    .score-note { margin-top: 6px; color: rgba(246, 239, 215, 0.66); font-size: 0.82rem; line-height: 1.5; }
+
+    .chat-column, .side-column { min-width: 0; display: grid; min-height: 0; }
+    .chat-column { border-right: 2px solid rgba(216, 210, 196, 0.08); grid-template-rows: auto auto 1fr auto; }
+    .side-column { grid-template-rows: auto auto minmax(0, 1fr); }
+    .panel-header, .rail { padding: 18px; display: grid; gap: 12px; min-height: 0; }
+    .rail { border-bottom: 2px solid rgba(216, 210, 196, 0.08); }
+    .rail:last-child { border-bottom: 0; }
+    .panel-label { font-size: 0.62rem; color: #ffd59c; }
+    .panel-title { color: #fff3d5; font-size: 1rem; }
+
+    .query-strip {
+      margin: 0 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 214, 167, 0.14);
+      padding: 14px 16px;
+      background: linear-gradient(180deg, var(--accent-soft), rgba(255, 255, 255, 0.02));
+      display: grid;
+      gap: 8px;
+    }
+
+    .query-strip-line, .status-copy, .hint, .queue-copy, .featured-copy, .evidence-copy, .source-line, .placeholder {
+      line-height: 1.62;
+      color: var(--muted);
+    }
+
+    .chat-log, .queue, .evidence-stack { padding: 18px; display: grid; gap: 12px; overflow-y: auto; min-height: 0; }
+    .chat-log { max-height: 60vh; align-content: start; }
+    .queue { max-height: 26vh; padding-top: 0; }
+    .evidence-stack { max-height: none; padding-top: 16px; align-content: start; }
+
+    .entry { display: grid; gap: 10px; }
+    .entry.user { justify-items: end; }
+    .bubble {
+      border-radius: 20px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.05);
+      white-space: pre-wrap;
+      line-height: 1.72;
+    }
+
+    .entry.user .bubble { max-width: 84%; background: linear-gradient(180deg, rgba(255, 158, 87, 0.22), rgba(159, 89, 46, 0.18)); }
+    .entry.assistant .bubble { max-width: 94%; }
+    .answer-meta, .featured-meta, .queue-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+    .meta-pill, .featured-meta span, .queue-meta span {
+      border-radius: 999px;
+      border: 1px solid rgba(133, 255, 191, 0.14);
+      padding: 5px 9px;
+      background: rgba(133, 255, 191, 0.05);
+      font-size: 0.75rem;
+    }
+
+    .warning-list, .source-list { display: grid; gap: 8px; }
+    .warning { border-radius: 16px; padding: 12px 14px; background: rgba(255, 181, 142, 0.12); border: 1px solid rgba(255, 181, 142, 0.18); color: #ffe5d3; }
+    .composer { border-top: 2px solid rgba(216, 210, 196, 0.08); padding: 16px 18px 18px; display: grid; gap: 12px; }
+    textarea {
+      width: 100%; min-height: 118px; resize: vertical; border-radius: 18px; border: 2px solid rgba(216, 210, 196, 0.14);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)), rgba(8, 18, 14, 0.88);
+      color: var(--text); padding: 16px 18px; font: inherit; line-height: 1.6;
+    }
+
+    .controls { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .action {
+      border-radius: 999px;
+      padding: 14px 18px;
+      min-width: 180px;
+      cursor: pointer;
+      color: #29170d;
+      background: linear-gradient(180deg, #ffd59c 0%, #ffb366 48%, #ef8144 100%);
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
+    }
+
+    .action:disabled { opacity: 0.62; cursor: wait; }
+    .featured, .evidence-card, .queue-card { border-radius: 18px; border: 1px solid rgba(133, 255, 191, 0.12); background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)), rgba(5, 12, 9, 0.84); }
+    .featured video { width: 100%; display: block; aspect-ratio: 16 / 9; background: #08120e; }
+    .featured-body, .evidence-body { padding: 14px; display: grid; gap: 10px; }
+    .featured-title, .evidence-title, .queue-title { color: #fff2cf; font-weight: 700; line-height: 1.45; }
+    .queue-card { padding: 12px 14px; display: grid; gap: 8px; text-align: left; cursor: pointer; min-width: 0; box-shadow: none; }
+    .queue-card.active { border-color: rgba(255, 216, 168, 0.34); box-shadow: inset 0 0 0 1px rgba(255, 216, 168, 0.16); background: linear-gradient(180deg, rgba(255, 158, 87, 0.12), rgba(255, 158, 87, 0.04)), rgba(5, 12, 9, 0.9); }
+    .queue-index { font-size: 0.5rem; color: #ffd8a8; }
+    .featured-link { color: #ffe6bb; text-decoration: none; font-size: 0.82rem; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+    .tab { border-radius: 999px; padding: 8px 10px; box-shadow: none; cursor: pointer; font-size: 0.72rem; min-width: 0; color: #fce8bd; }
+    .tab.active { background: rgba(255, 158, 87, 0.18); border-color: rgba(255, 216, 168, 0.18); color: #fff4da; }
+    .placeholder { border-radius: 18px; border: 1px dashed rgba(216, 210, 196, 0.18); padding: 16px; background: rgba(255, 255, 255, 0.02); }
+    .evidence-rail { grid-template-rows: auto minmax(0, 1fr); padding: 0; }
+    .evidence-header { padding: 18px 18px 10px; display: grid; gap: 12px; border-bottom: 1px solid rgba(216, 210, 196, 0.08); background: linear-gradient(180deg, rgba(8, 18, 14, 0.98), rgba(14, 30, 24, 0.95)); }
+    .evidence-card { overflow: hidden; }
+    .evidence-body { gap: 12px; }
+    .evidence-kicker { color: rgba(255, 230, 187, 0.72); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .evidence-table-wrap {
+      overflow-x: auto;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 234, 189, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .evidence-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 440px;
+      font-size: 0.82rem;
+    }
+    .evidence-table th,
+    .evidence-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 234, 189, 0.08);
+      vertical-align: top;
+    }
+    .evidence-table th {
+      color: #ffd59c;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      background: rgba(255, 158, 87, 0.08);
+      white-space: nowrap;
+    }
+    .evidence-table tr:last-child td { border-bottom: 0; }
+    .evidence-table .align-right { text-align: right; }
+    .evidence-table .align-left { text-align: left; }
+
+    @media (max-width: 1180px) {
+      .hero, .workbench { grid-template-columns: 1fr; }
+      .chat-column { border-right: 0; border-bottom: 2px solid rgba(216, 210, 196, 0.08); }
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 16px 12px 20px; }
+      .score-strip { grid-template-columns: 1fr; }
+      .chat-log, .queue, .evidence-stack { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="masthead">
+        <div class="eyebrow">DiamondVision 64 // MLB Research & Replay Console</div>
+        <h1>Stat lookup, historical context, and the actual tape in one place.</h1>
+        <div class="subhead">
+          Ask for sabermetric definitions, Fielding Bible leaderboards, player/date highlights, or a specific play. When the backend can verify a public Baseball Savant sporty-video page, the console puts the clip on deck and explains why it matters.
+        </div>
+        <div class="hero-chips">
+          <button class="prompt-chip" data-prompt="What was Adolis Garcia's rHR on July 29, 2025?">Adolis robbery tape</button>
+          <button class="prompt-chip" data-prompt="Show me Jo Adell's defensive clips tonight.">Jo Adell defense tape</button>
+          <button class="prompt-chip" data-prompt="Show me Mike Trout clips from July 29, 2025.">Trout game clips</button>
+          <button class="prompt-chip" data-prompt="Which infielders led DRS in 2013?">2013 IF DRS</button>
+          <button class="prompt-chip" data-prompt="What is rARM?">Define rARM</button>
+        </div>
+      </div>
+
+      <aside class="status-board">
+        <div class="panel-label">Console State</div>
+        <div class="score-strip">
+          <div class="score-card">
+            <span class="score-label">Mode</span>
+            <div id="classification" class="score-value">Idle</div>
+            <div class="score-note">Current answer mode</div>
+          </div>
+          <div class="score-card">
+            <span class="score-label">Replay Count</span>
+            <div id="clip-count" class="score-value">0</div>
+            <div class="score-note">Relevant sporty clips returned</div>
+          </div>
+          <div class="score-card">
+            <span class="score-label">Evidence</span>
+            <div id="evidence-count" class="score-value">0</div>
+            <div class="score-note">Grounding snippets for the latest answer</div>
+          </div>
+          <div class="score-card">
+            <span class="score-label">API</span>
+            <div id="api-status" class="score-value">Checking</div>
+            <div id="api-note" class="score-note">Pinging backend health</div>
+          </div>
+        </div>
+        <div class="status-copy">
+          Built for baseball-only retrieval, live MLB lookups, exact season-level DRS syncs, and replay-aware answers that can show the actual clip when a public Savant page exists.
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel workbench">
+      <section class="chat-column">
+        <div class="panel-header">
+          <div class="panel-label">Research Feed</div>
+          <div class="panel-title">Ask the console anything MLB-related</div>
+        </div>
+
+        <div class="query-strip">
+          <div id="last-query" class="query-strip-line"><strong>Last query:</strong> none yet</div>
+          <div id="last-summary" class="query-strip-line"><strong>What this is good at:</strong> player/date clips, DRS leaderboards, sabermetric definitions, and live MLB snapshots.</div>
+        </div>
+
+        <div id="chat-log" class="chat-log">
+          <div class="entry assistant">
+            <div class="bubble">
+              Try a question that mixes numbers and tape. Example: "What was Adolis Garcia's rHR on July 29, 2025?" or "Show me Mike Trout clips from July 29, 2025."
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <textarea id="question" placeholder="Ask an MLB-only question. Add a player plus a date if you want replay tape."></textarea>
+          <div class="controls">
+            <div class="hint">
+              Tip: player + date is the best replay search. Defensive wording like "defensive clips" or "robbed a home run" helps the ranking stay focused.
+            </div>
+            <button id="send" class="action">Run Lookup</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-column">
+        <section class="rail">
+          <div class="panel-label">Now Playing</div>
+          <div id="featured-clip" class="placeholder">
+            <strong>No clip selected yet.</strong> Run a replay-aware lookup and the top matching Savant clip will appear here with the reasoning behind it.
+          </div>
+        </section>
+
+        <section class="rail">
+          <div class="panel-label">Replay Queue</div>
+          <div id="clips" class="queue">
+            <div class="placeholder">
+              Relevant clips will queue here when the backend can connect your question to a public Baseball Savant sporty-video page.
+            </div>
+          </div>
+        </section>
+
+        <section class="rail evidence-rail">
+          <div class="evidence-header">
+            <div class="panel-label">Evidence Deck</div>
+            <div class="tabs">
+              <button class="tab active" data-tab="glossary">Glossary</button>
+              <button class="tab" data-tab="historical">Historical</button>
+              <button class="tab" data-tab="replays">Replays</button>
+              <button class="tab" data-tab="live">Live</button>
+            </div>
+          </div>
+          <div id="evidence-stack" class="evidence-stack">
+            <div class="placeholder">
+              Definitions, leaderboards, replay evidence, and live source snippets will stack here after each lookup.
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+  <script>
+    const sessionId = crypto.randomUUID();
+    const log = document.getElementById("chat-log");
+    const input = document.getElementById("question");
+    const send = document.getElementById("send");
+    const classificationNode = document.getElementById("classification");
+    const clipCountNode = document.getElementById("clip-count");
+    const evidenceCountNode = document.getElementById("evidence-count");
+    const apiStatusNode = document.getElementById("api-status");
+    const apiNoteNode = document.getElementById("api-note");
+    const featuredNode = document.getElementById("featured-clip");
+    const clipsNode = document.getElementById("clips");
+    const evidenceNode = document.getElementById("evidence-stack");
+    const lastQueryNode = document.getElementById("last-query");
+    const lastSummaryNode = document.getElementById("last-summary");
+    const tabs = Array.from(document.querySelectorAll(".tab"));
+    const promptButtons = Array.from(document.querySelectorAll("[data-prompt]"));
+
+    let latestEvidence = { glossary: [], historical: [], replays: [], live: [] };
+    let latestClips = [];
+    let activeTab = "glossary";
+    let activeClipKey = "";
+
+    function escapeHtml(value) {
+      return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;");
+    }
+
+    function escapeAttribute(value) {
+      return escapeHtml(value).replaceAll("'", "&#39;");
+    }
+
+    function clipKey(clip) {
+      return clip.play_id || clip.savant_url || clip.mp4_url || clip.title || "";
+    }
+
+    function clipMeta(clip) {
+      return [
+        clip.game_date,
+        clip.team_matchup,
+        clip.actor_name || clip.fielder_name,
+        (clip.actor_roles || []).join("/") || "",
+        clip.batter_name ? `vs ${clip.batter_name}` : "",
+        (clip.match_tags || []).map((value) => `tag:${value}`).join(" "),
+        clip.hr_parks ? `${clip.hr_parks}/30 HR parks` : "",
+        clip.hit_distance ? `${Math.round(Number(clip.hit_distance))} ft` : "",
+        clip.exit_velocity ? `${Number(clip.exit_velocity).toFixed(1)} mph EV` : "",
+      ].filter(Boolean);
+    }
+
+    function totalEvidenceCount(evidence) {
+      return Object.values(evidence || {}).reduce((sum, items) => sum + (Array.isArray(items) ? items.length : 0), 0);
+    }
+
+    function appendEntry(role, text, payload = null) {
+      const entry = document.createElement("div");
+      entry.className = `entry ${role}`;
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = text;
+      entry.appendChild(bubble);
+
+      if (payload && role === "assistant") {
+        const meta = document.createElement("div");
+        meta.className = "answer-meta";
+        meta.innerHTML = `
+          <span class="meta-pill">Mode: ${escapeHtml(payload.classification || "unknown")}</span>
+          <span class="meta-pill">Sources: ${(payload.citations || []).length}</span>
+          <span class="meta-pill">Clips: ${(payload.clips || []).length}</span>
+        `;
+        entry.appendChild(meta);
+
+        if (payload.warnings && payload.warnings.length) {
+          const warningList = document.createElement("div");
+          warningList.className = "warning-list";
+          payload.warnings.forEach((warning) => {
+            const node = document.createElement("div");
+            node.className = "warning";
+            node.textContent = warning;
+            warningList.appendChild(node);
+          });
+          entry.appendChild(warningList);
+        }
+
+        if (payload.citations && payload.citations.length) {
+          const sourceList = document.createElement("div");
+          sourceList.className = "source-list";
+          const node = document.createElement("div");
+          node.className = "source-line";
+          node.textContent = `Source labels: ${payload.citations.join(", ")}`;
+          sourceList.appendChild(node);
+          entry.appendChild(sourceList);
+        }
+      }
+
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderEvidence() {
+      const items = latestEvidence[activeTab] || [];
+      evidenceNode.innerHTML = items.length
+        ? items.map((item) => renderEvidenceCard(item)).join("")
+        : `<div class="placeholder">No ${escapeHtml(activeTab)} evidence was returned for the latest lookup.</div>`;
+    }
+
+    function renderEvidenceCard(item) {
+      const display = item.display || null;
+      const body = display?.kind === "table"
+        ? renderEvidenceTable(display)
+        : `<div class="evidence-copy">${escapeHtml(item.summary || "")}</div>`;
+      const kicker = display?.kind === "table"
+        ? `<div class="evidence-kicker">Structured evidence</div>`
+        : "";
+      return `
+        <article class="evidence-card">
+          <div class="evidence-body">
+            ${kicker}
+            <div class="evidence-title">${escapeHtml(item.title || "Untitled evidence")}</div>
+            ${body}
+            <div class="source-line">${escapeHtml(item.source || "")} // ${escapeHtml(item.citation || "")}</div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderEvidenceTable(display) {
+      const columns = Array.isArray(display.columns) ? display.columns : [];
+      const rows = Array.isArray(display.rows) ? display.rows : [];
+      const header = columns.map((column) => `
+        <th class="align-${escapeHtml(column.align || "left")}">${escapeHtml(column.label || column.key || "")}</th>
+      `).join("");
+      const body = rows.map((row) => `
+        <tr>
+          ${columns.map((column) => `
+            <td class="align-${escapeHtml(column.align || "left")}">${escapeHtml(row[column.key] ?? "")}</td>
+          `).join("")}
+        </tr>
+      `).join("");
+      return `
+        <div class="evidence-table-wrap">
+          <table class="evidence-table">
+            <thead><tr>${header}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderFeaturedClip() {
+      if (!latestClips.length) {
+        featuredNode.className = "placeholder";
+        featuredNode.innerHTML = `<strong>No clip selected yet.</strong> Run a replay-aware lookup and the top matching Savant clip will appear here with the reasoning behind it.`;
+        return;
+      }
+
+      const clip = latestClips.find((item) => clipKey(item) === activeClipKey) || latestClips[0];
+      activeClipKey = clipKey(clip);
+      const savantLink = clip.savant_url
+        ? `<a class="featured-link" href="${escapeAttribute(clip.savant_url)}" target="_blank" rel="noreferrer">Open Savant page</a>`
+        : "";
+      const video = clip.mp4_url ? `<video controls preload="metadata" src="${escapeAttribute(clip.mp4_url)}"></video>` : "";
+      featuredNode.className = "featured";
+      featuredNode.innerHTML = `
+        ${video}
+        <div class="featured-body">
+          <div class="featured-title">${escapeHtml(clip.title || "Replay clip")}</div>
+          <div class="featured-copy">${escapeHtml(clip.explanation || "")}</div>
+          <div class="featured-meta">${clipMeta(clip).map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>
+          ${savantLink}
+        </div>
+      `;
+    }
+
+    function renderQueue(clips) {
+      latestClips = clips || [];
+      clipCountNode.textContent = String(latestClips.length);
+      if (!latestClips.length) {
+        activeClipKey = "";
+        clipsNode.innerHTML = `<div class="placeholder">No clip cards came back for the latest answer. The research stack still ran, but no public sporty-video match was attached.</div>`;
+        renderFeaturedClip();
+        return;
+      }
+
+      if (!activeClipKey || !latestClips.some((clip) => clipKey(clip) === activeClipKey)) {
+        activeClipKey = clipKey(latestClips[0]);
+      }
+
+      clipsNode.innerHTML = "";
+      latestClips.forEach((clip, index) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = `queue-card${clipKey(clip) === activeClipKey ? " active" : ""}`;
+        card.innerHTML = `
+          <div class="queue-index">Replay ${index + 1}</div>
+          <div class="queue-title">${escapeHtml(clip.title || "Replay clip")}</div>
+          <div class="queue-copy">${escapeHtml(clip.explanation || "")}</div>
+          <div class="queue-meta">${clipMeta(clip).slice(0, 4).map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>
+        `;
+        card.addEventListener("click", () => {
+          activeClipKey = clipKey(clip);
+          renderQueue(latestClips);
+        });
+        clipsNode.appendChild(card);
+      });
+
+      renderFeaturedClip();
+    }
+
+    async function submit(questionOverride = null) {
+      const question = (questionOverride || input.value).trim();
+      if (!question) return;
+
+      appendEntry("user", question);
+      input.value = "";
+      send.disabled = true;
+      send.textContent = "Scanning...";
+      classificationNode.textContent = "Scanning";
+      lastQueryNode.innerHTML = `<strong>Last query:</strong> ${escapeHtml(question)}`;
+      lastSummaryNode.innerHTML = `<strong>Console note:</strong> building a grounded answer now.`;
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question, session_id: sessionId })
+        });
+        const payload = await response.json();
+        latestEvidence = payload.evidence || { glossary: [], historical: [], replays: [], live: [] };
+        evidenceCountNode.textContent = String(totalEvidenceCount(latestEvidence));
+        classificationNode.textContent = (payload.classification || "unknown").replace(/^./, (match) => match.toUpperCase());
+        appendEntry("assistant", payload.answer || "No answer returned.", payload);
+        lastSummaryNode.innerHTML = payload.clips?.length
+          ? `<strong>Replay focus:</strong> ${escapeHtml(payload.clips[0].title || "Top replay match")} is loaded in the player.`
+          : `<strong>Top evidence:</strong> ${escapeHtml((payload.evidence?.historical?.[0] || payload.evidence?.glossary?.[0] || payload.evidence?.live?.[0] || {}).title || "No grounded evidence returned")}`;
+        renderEvidence();
+        renderQueue(payload.clips || []);
+      } catch (error) {
+        appendEntry("assistant", `Lookup failed: ${error}`, { classification: "error", citations: [], clips: [] });
+        classificationNode.textContent = "Error";
+        evidenceCountNode.textContent = "0";
+        latestEvidence = { glossary: [], historical: [], replays: [], live: [] };
+        renderEvidence();
+        renderQueue([]);
+      } finally {
+        send.disabled = false;
+        send.textContent = "Run Lookup";
+        input.focus();
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const response = await fetch("/health");
+        const payload = await response.json();
+        apiStatusNode.textContent = payload.ok ? "Online" : "Issues";
+        apiStatusNode.className = payload.ok ? "score-value status-ok" : "score-value status-bad";
+        apiNoteNode.textContent = payload.database_exists ? "Database ready" : "Database missing";
+      } catch (error) {
+        apiStatusNode.textContent = "Offline";
+        apiStatusNode.className = "score-value status-bad";
+        apiNoteNode.textContent = String(error);
+      }
+    }
+
+    tabs.forEach((tab) => tab.addEventListener("click", () => {
+      tabs.forEach((node) => node.classList.remove("active"));
+      tab.classList.add("active");
+      activeTab = tab.dataset.tab;
+      renderEvidence();
+    }));
+
+    promptButtons.forEach((button) => button.addEventListener("click", () => {
+      input.value = button.dataset.prompt;
+      input.focus();
+    }));
+
+    send.addEventListener("click", () => submit());
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        submit();
+      }
+    });
+
+    checkHealth();
+    renderEvidence();
+    renderFeaturedClip();
+  </script>
+</body>
+</html>
