@@ -894,7 +894,14 @@ def is_barrel_series(exit_velocity, launch_angle):
     upper_bound = 30 + angle_buffer
     lower_bound = lower_bound.clip(lower=8)
     upper_bound = upper_bound.clip(upper=50)
-    return (exit_velocity >= 98) & launch_angle.notna() & (launch_angle >= lower_bound) & (launch_angle <= upper_bound)
+    result = (
+        exit_velocity.notna()
+        & launch_angle.notna()
+        & (exit_velocity >= 98)
+        & (launch_angle >= lower_bound)
+        & (launch_angle <= upper_bound)
+    )
+    return result.fillna(False)
 
 
 def format_statcast_pitcher_name(value: str) -> str:

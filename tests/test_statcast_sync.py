@@ -9,6 +9,7 @@ from mlb_history_bot.statcast_sync import (
     aggregate_statcast_pitch_type_games,
     aggregate_statcast_team_games,
     is_barrel,
+    is_barrel_series,
     resolve_daily_statcast_window,
 )
 from mlb_history_bot.storage import initialize_database, set_metadata_value
@@ -30,6 +31,13 @@ def test_is_barrel_public_definition_examples() -> None:
     assert is_barrel(98.0, 26.0) is True
     assert is_barrel(98.0, 20.0) is False
     assert is_barrel(110.0, 20.0) is True
+
+
+def test_is_barrel_series_handles_nullable_values() -> None:
+    exit_velocity = pd.Series([101.0, None, 99.0], dtype="Float64")
+    launch_angle = pd.Series([27.0, 20.0, None], dtype="Float64")
+    result = is_barrel_series(exit_velocity, launch_angle)
+    assert result.tolist() == [True, False, False]
 
 
 def test_aggregate_statcast_team_games() -> None:
