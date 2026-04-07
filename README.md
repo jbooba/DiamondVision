@@ -113,6 +113,10 @@ If you also want Retrosheet `plays.csv`, include it explicitly:
 python -m mlb_history_bot prepare --include-retrosheet-plays
 ```
 
+That file is used for the derived split/count/context builders, not for a persisted
+`retrosheet_plays` SQLite table. Base `ingest` intentionally skips importing raw
+`plays.csv` into the runtime database to avoid huge SQLite volume growth during setup.
+
 To ingest local SABR or other baseball research docs that you already have:
 
 1. Put them in `data\raw\sabr\`

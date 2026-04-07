@@ -116,6 +116,10 @@ def ingest_project_data(
 def _import_csv_directory(connection, directory: Path, *, prefix: str) -> int:
     imported = 0
     for csv_path in sorted(directory.glob("*.csv")):
+        if prefix == "retrosheet" and csv_path.stem.lower() == "plays":
+            # The raw Retrosheet plays file is used to build compact summary tables
+            # separately and should not be imported wholesale into the runtime DB.
+            continue
         table_name = f"{prefix}_{csv_path.stem.lower()}"
         import_csv_file(
             connection,
