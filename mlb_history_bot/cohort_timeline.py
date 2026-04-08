@@ -55,6 +55,7 @@ class ResolvedCohort:
     team_code: str | None = None
     team_name: str | None = None
     player_ids: set[str] | None = None
+    player_names: set[str] | None = None
     country_filter: tuple[str, ...] | None = None
     bats_filter: tuple[str, ...] | None = None
     throws_filter: tuple[str, ...] | None = None
@@ -116,7 +117,8 @@ def parse_birth_country_filter(question: str) -> CohortFilter | None:
 
 def parse_handedness_filter(question: str) -> CohortFilter | None:
     if SWITCH_HITTER_PATTERN.search(question):
-        return CohortFilter(kind="bat_handedness", label="switch-hitters", bats_filter=("S",))
+        # Lahman encodes switch-hitters as B ("both"), but some external sources use S.
+        return CohortFilter(kind="bat_handedness", label="switch-hitters", bats_filter=("B", "S"))
     if LEFT_HANDED_HITTER_PATTERN.search(question):
         return CohortFilter(kind="bat_handedness", label="left-handed hitters", bats_filter=("L",))
     if RIGHT_HANDED_HITTER_PATTERN.search(question):
@@ -153,7 +155,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             team_name=seasons[0].team_name,
         )
     if cohort.kind == "birth_country":
-        player_ids = load_birth_country_player_ids(connection, cohort.country_filter or tuple())
+        player_ids, player_names = load_birth_country_people(connection, cohort.country_filter or tuple())
         if not player_ids:
             return None
         return ResolvedCohort(
@@ -161,10 +163,11 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             label=cohort.label,
             seasons=tuple(),
             player_ids=player_ids,
+            player_names=player_names,
             country_filter=cohort.country_filter,
         )
     if cohort.kind == "bat_handedness":
-        player_ids = load_people_filter_player_ids(connection, bats_filter=cohort.bats_filter)
+        player_ids, player_names = load_people_filter_identities(connection, bats_filter=cohort.bats_filter)
         if not player_ids:
             return None
         return ResolvedCohort(
@@ -172,10 +175,11 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             label=cohort.label,
             seasons=tuple(),
             player_ids=player_ids,
+            player_names=player_names,
             bats_filter=cohort.bats_filter,
         )
     if cohort.kind == "throw_handedness":
-        player_ids = load_people_filter_player_ids(connection, throws_filter=cohort.throws_filter)
+        player_ids, player_names = load_people_filter_identities(connection, throws_filter=cohort.throws_filter)
         if not player_ids:
             return None
         return ResolvedCohort(
@@ -183,10 +187,11 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             label=cohort.label,
             seasons=tuple(),
             player_ids=player_ids,
+            player_names=player_names,
             throws_filter=cohort.throws_filter,
         )
     if cohort.kind == "hall_of_fame":
-        player_ids = load_hall_of_fame_player_ids(connection)
+        player_ids, player_names = load_hall_of_fame_identities(connection)
         if not player_ids:
             return None
         return ResolvedCohort(
@@ -194,34 +199,35 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             label=cohort.label,
             seasons=tuple(),
             player_ids=player_ids,
+            player_names=player_names,
         )
     return None
 
 
-def load_birth_country_player_ids(connection, country_filter: tuple[str, ...]) -> set[str]:
+def load_birth_country_people(connection, country_filter: tuple[str, ...]) -> tuple[set[str], set[str]]:
     if not country_filter or not table_exists(connection, "lahman_people"):
-        return set()
+        return set(), set()
     placeholders = ",".join("?" for _ in country_filter)
     rows = connection.execute(
         f"""
-        SELECT playerid
+        SELECT playerid, namefirst, namelast
         FROM lahman_people
         WHERE COALESCE(playerid, '') <> ''
           AND birthcountry IN ({placeholders})
         """,
         tuple(country_filter),
     ).fetchall()
-    return {str(row["playerid"]) for row in rows if str(row["playerid"] or "").strip()}
+    return extract_identity_sets(rows)
 
 
-def load_people_filter_player_ids(
+def load_people_filter_identities(
     connection,
     *,
     bats_filter: tuple[str, ...] | None = None,
     throws_filter: tuple[str, ...] | None = None,
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     if not table_exists(connection, "lahman_people"):
-        return set()
+        return set(), set()
     clauses = ["COALESCE(playerid, '') <> ''"]
     parameters: list[str] = []
     if bats_filter:
@@ -234,27 +240,42 @@ def load_people_filter_player_ids(
         parameters.extend(throws_filter)
     rows = connection.execute(
         f"""
-        SELECT playerid
+        SELECT playerid, namefirst, namelast
         FROM lahman_people
         WHERE {' AND '.join(clauses)}
         """,
         tuple(parameters),
     ).fetchall()
-    return {str(row["playerid"]) for row in rows if str(row["playerid"] or "").strip()}
+    return extract_identity_sets(rows)
 
 
-def load_hall_of_fame_player_ids(connection) -> set[str]:
-    if not table_exists(connection, "lahman_halloffame"):
-        return set()
+def load_hall_of_fame_identities(connection) -> tuple[set[str], set[str]]:
+    if not (table_exists(connection, "lahman_halloffame") and table_exists(connection, "lahman_people")):
+        return set(), set()
     rows = connection.execute(
         """
-        SELECT DISTINCT playerid
-        FROM lahman_halloffame
-        WHERE lower(COALESCE(inducted, '')) = 'y'
-          AND COALESCE(playerid, '') <> ''
+        SELECT DISTINCT hof.playerid, ppl.namefirst, ppl.namelast
+        FROM lahman_halloffame AS hof
+        JOIN lahman_people AS ppl
+          ON ppl.playerid = hof.playerid
+        WHERE lower(COALESCE(hof.inducted, '')) = 'y'
+          AND COALESCE(hof.playerid, '') <> ''
         """
     ).fetchall()
-    return {str(row["playerid"]) for row in rows if str(row["playerid"] or "").strip()}
+    return extract_identity_sets(rows)
+
+
+def extract_identity_sets(rows) -> tuple[set[str], set[str]]:
+    player_ids: set[str] = set()
+    player_names: set[str] = set()
+    for row in rows:
+        player_id = str(row["playerid"] or "").strip()
+        if player_id:
+            player_ids.add(player_id)
+        name = " ".join(part for part in (str(row["namefirst"] or "").strip(), str(row["namelast"] or "").strip()) if part)
+        if name:
+            player_names.add(name.lower())
+    return player_ids, player_names
 
 
 def clean_phrase(value: str) -> str:

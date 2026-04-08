@@ -62,6 +62,7 @@ from .storage import (
     table_exists,
 )
 from .team_evaluator import TeamEvaluator
+from .team_evaluator import safe_int
 from .team_history_rankings import TeamHistoryRankingResearcher
 from .team_roster_leaders import TeamRosterLeaderResearcher
 from .team_season_leaders import TeamSeasonLeaderResearcher
@@ -661,7 +662,7 @@ class BaseballResearchEngine:
     def _player_summary(self, connection, player_name: str) -> EvidenceSnippet | None:
         if not table_exists(connection, "lahman_people"):
             return None
-        row = connection.execute(
+        candidate_rows = connection.execute(
             """
             SELECT *
             FROM lahman_people
@@ -673,14 +674,17 @@ class BaseballResearchEngine:
                     ELSE 1
                 END,
                 finalgame DESC
-            LIMIT 1
+            LIMIT 25
             """,
             (f"%{player_name.lower()}%", f"%{player_name.lower()}%", player_name.lower()),
-        ).fetchone()
-        if row is None:
+        ).fetchall()
+        if not candidate_rows:
             return None
+        row = max(candidate_rows, key=lambda item: self._player_profile_rank(connection, item, player_name))
 
         player_id = row["playerid"]
+        latest_team = self._latest_player_team(connection, player_id)
+        primary_position = self._latest_player_position(connection, player_id)
         batting_summary = self._aggregate_player_totals(
             connection,
             "lahman_batting",
@@ -705,6 +709,60 @@ class BaseballResearchEngine:
             },
         )
         parts: list[str] = []
+        full_name = f"{row['namefirst']} {row['namelast']}".strip()
+        handedness_bits: list[str] = []
+        bats = str(row["bats"] or "").strip()
+        throws = str(row["throws"] or "").strip()
+        if bats:
+            handedness_bits.append(
+                {
+                    "L": "left-handed hitter",
+                    "R": "right-handed hitter",
+                    "S": "switch-hitter",
+                    "B": "switch-hitter",
+                }.get(bats.upper(), f"bats {bats.upper()}")
+            )
+        if throws:
+            handedness_bits.append(
+                {
+                    "L": "throws left",
+                    "R": "throws right",
+                }.get(throws.upper(), f"throws {throws.upper()}")
+            )
+        identity_parts: list[str] = []
+        if handedness_bits:
+            identity_parts.append(", ".join(filter(None, handedness_bits)))
+        if primary_position:
+            identity_parts.append(primary_position)
+        if latest_team:
+            identity_parts.append(f"latest imported team: {latest_team}")
+        if identity_parts:
+            parts.append(f"{full_name} is an MLB player listed in Lahman as a {'; '.join(identity_parts)}.")
+        birth_parts: list[str] = []
+        birth_city = str(row["birthcity"] or "").strip() if "birthcity" in row.keys() else ""
+        birth_state = str(row["birthstate"] or "").strip() if "birthstate" in row.keys() else ""
+        birth_country = str(row["birthcountry"] or "").strip() if "birthcountry" in row.keys() else ""
+        birth_year = str(row["birthyear"] or "").strip() if "birthyear" in row.keys() else ""
+        if birth_city:
+            birth_parts.append(birth_city)
+        if birth_state:
+            birth_parts.append(birth_state)
+        if birth_country:
+            birth_parts.append(birth_country)
+        if birth_parts or birth_year:
+            location = ", ".join(part for part in birth_parts if part)
+            if birth_year and location:
+                parts.append(f"Born in {location} in {birth_year}.")
+            elif location:
+                parts.append(f"Born in {location}.")
+            elif birth_year:
+                parts.append(f"Born in {birth_year}.")
+        debut = str(row["debut"] or "").strip() if "debut" in row.keys() else ""
+        final_game = str(row["finalgame"] or "").strip() if "finalgame" in row.keys() else ""
+        if debut:
+            parts.append(f"MLB debut in imported records: {debut}.")
+        if final_game:
+            parts.append(f"Most recent game in imported records: {final_game}.")
         if batting_summary:
             parts.append(
                 "Batting totals: "
@@ -721,7 +779,6 @@ class BaseballResearchEngine:
                 f"{innings} IP."
             )
         summary = " ".join(parts) if parts else "Player found in Lahman with no imported totals yet."
-        full_name = f"{row['namefirst']} {row['namelast']}".strip()
         return EvidenceSnippet(
             source="Lahman Database",
             title=f"{full_name} career summary",
@@ -733,6 +790,102 @@ class BaseballResearchEngine:
                 "final_game": row["finalgame"] if "finalgame" in row.keys() else "",
             },
         )
+
+    def _player_profile_rank(self, connection, row, requested_name: str) -> tuple[int, int, int, int, str]:
+        full_name = " ".join(
+            part for part in (str(row["namefirst"] or "").strip(), str(row["namelast"] or "").strip()) if part
+        ).lower()
+        exact_match = 1 if full_name == requested_name.lower().strip() else 0
+        latest_season, total_games = self._player_activity_score(connection, str(row["playerid"] or ""))
+        active_hint = 1 if latest_season >= (self.settings.live_season or date.today().year) - 1 else 0
+        final_game = str(row["finalgame"] or "")
+        return (exact_match, active_hint, latest_season, total_games, final_game)
+
+    def _latest_player_team(self, connection, player_id: str) -> str:
+        candidate_tables = [
+            ("lahman_batting", "yearid", "teamid"),
+            ("lahman_pitching", "yearid", "teamid"),
+            ("lahman_fielding", "yearid", "teamid"),
+        ]
+        best_year = -1
+        best_team = ""
+        for table_name, year_column, team_column in candidate_tables:
+            if not table_exists(connection, table_name):
+                continue
+            row = connection.execute(
+                f"""
+                SELECT CAST({year_column} AS INTEGER) AS season, {team_column} AS team_id
+                FROM {table_name}
+                WHERE playerid = ?
+                ORDER BY CAST({year_column} AS INTEGER) DESC
+                LIMIT 1
+                """,
+                (player_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            season = int(row["season"] or 0)
+            if season > best_year:
+                best_year = season
+                best_team = str(row["team_id"] or "")
+        if not best_team:
+            return ""
+        if table_exists(connection, "lahman_teams") and best_year > 0:
+            team_row = connection.execute(
+                """
+                SELECT name
+                FROM lahman_teams
+                WHERE CAST(yearid AS INTEGER) = ?
+                  AND lower(teamid) = ?
+                LIMIT 1
+                """,
+                (best_year, best_team.lower()),
+            ).fetchone()
+            if team_row is not None and str(team_row["name"] or "").strip():
+                return f"{team_row['name']} ({best_year})"
+        return f"{best_team.upper()} ({best_year})" if best_year > 0 else best_team.upper()
+
+    def _latest_player_position(self, connection, player_id: str) -> str:
+        if not table_exists(connection, "lahman_fielding"):
+            return ""
+        row = connection.execute(
+            """
+            SELECT pos, SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS games
+            FROM lahman_fielding
+            WHERE playerid = ?
+            GROUP BY pos
+            ORDER BY games DESC, pos ASC
+            LIMIT 1
+            """,
+            (player_id,),
+        ).fetchone()
+        if row is None:
+            if table_exists(connection, "lahman_pitching"):
+                pitch_row = connection.execute(
+                    """
+                    SELECT SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS games
+                    FROM lahman_pitching
+                    WHERE playerid = ?
+                    """,
+                    (player_id,),
+                ).fetchone()
+                if pitch_row is not None and float(pitch_row["games"] or 0) > 0:
+                    return "pitcher"
+            return ""
+        position_code = str(row["pos"] or "").strip().upper()
+        return {
+            "P": "pitcher",
+            "C": "catcher",
+            "1B": "first baseman",
+            "2B": "second baseman",
+            "3B": "third baseman",
+            "SS": "shortstop",
+            "LF": "left fielder",
+            "CF": "center fielder",
+            "RF": "right fielder",
+            "OF": "outfielder",
+            "DH": "designated hitter",
+        }.get(position_code, position_code.lower())
 
     def _aggregate_player_totals(
         self,
@@ -759,6 +912,33 @@ class BaseballResearchEngine:
         if row is None:
             return {}
         return {alias: float(row[alias] or 0) for alias in aliases}
+
+    def _player_activity_score(self, connection, player_id: str) -> tuple[int, int]:
+        latest_season = 0
+        total_games = 0
+        candidate_tables = [
+            ("lahman_batting", "yearid", "g"),
+            ("lahman_pitching", "yearid", "g"),
+            ("lahman_fielding", "yearid", "g"),
+        ]
+        for table_name, year_column, games_column in candidate_tables:
+            if not table_exists(connection, table_name):
+                continue
+            row = connection.execute(
+                f"""
+                SELECT
+                    MAX(CAST(COALESCE({year_column}, '0') AS INTEGER)) AS latest_year,
+                    SUM(CAST(COALESCE({games_column}, '0') AS INTEGER)) AS games
+                FROM {table_name}
+                WHERE playerid = ?
+                """,
+                (player_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            latest_season = max(latest_season, safe_int(row["latest_year"]) or 0)
+            total_games += safe_int(row["games"]) or 0
+        return latest_season, total_games
 
     def _team_summary(self, connection, question: str, year: int) -> EvidenceSnippet | None:
         if not table_exists(connection, "lahman_teams"):

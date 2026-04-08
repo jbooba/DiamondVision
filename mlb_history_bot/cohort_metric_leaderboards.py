@@ -11,7 +11,13 @@ from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent
 from .query_utils import extract_referenced_season, question_requests_current_scope
 from .relationship_ontology import ROLE_HINTS
-from .season_metric_leaderboards import SEASON_METRICS, SeasonMetricSpec, find_season_metric, passes_sample_threshold
+from .season_metric_leaderboards import (
+    SEASON_METRICS,
+    SeasonMetricSpec,
+    find_season_metric,
+    passes_sample_threshold,
+    statcast_batter_metric_values,
+)
 from .storage import table_exists
 from .team_evaluator import safe_float, safe_int
 from .team_season_leaders import (
@@ -48,7 +54,9 @@ class CohortMetricLeaderboardResearcher:
         query = parse_cohort_metric_query(connection, question, self.settings)
         if query is None:
             return None
-        if query.role in {"pitcher", "starter", "reliever"}:
+        if query.metric.source_family == "statcast":
+            rows = fetch_statcast_rows(connection, query)
+        elif query.role in {"pitcher", "starter", "reliever"}:
             rows = fetch_pitching_rows(connection, query)
         elif query.role == "fielder":
             rows = fetch_fielding_rows(connection, query)
@@ -70,6 +78,7 @@ class CohortMetricLeaderboardResearcher:
                 "cohort_label": query.cohort.label,
                 "metric": query.metric.label,
                 "role": query.role,
+                "source_family": query.metric.source_family,
                 "scope_label": query.scope_label,
                 "rows": rows[:12],
             },
@@ -87,7 +96,7 @@ def parse_cohort_metric_query(connection, question: str, settings: Settings) -> 
     lowered = f" {question.lower()} "
     metric_question = re.sub(r"[?.!,:'\"]", " ", lowered)
     metric = find_season_metric(metric_question)
-    if metric is None or metric.source_family != "historical" or metric.entity_scope != "player":
+    if metric is None or metric.entity_scope != "player" or metric.source_family not in {"historical", "statcast"}:
         metric = default_metric_for_cohort(question)
     if metric is None:
         return None
@@ -297,6 +306,125 @@ def fetch_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, A
     return rank_rows(candidates, query)
 
 
+def fetch_statcast_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
+    if query.role not in {"hitter", "player"}:
+        return []
+    return fetch_statcast_hitting_rows(connection, query)
+
+
+def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
+    if not table_exists(connection, "statcast_batter_games"):
+        return []
+    identity_sql, identity_params = build_statcast_identity_filter(query.cohort)
+    if identity_sql is None:
+        return []
+    clauses = [identity_sql]
+    parameters: list[Any] = list(identity_params)
+    if query.start_season is not None:
+        clauses.append("season >= ?")
+        parameters.append(query.start_season)
+    if query.end_season is not None:
+        clauses.append("season <= ?")
+        parameters.append(query.end_season)
+    rows = connection.execute(
+        f"""
+        SELECT
+            batter_id,
+            MIN(batter_name) AS player_name,
+            MIN(season) AS first_season,
+            MAX(season) AS last_season,
+            CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
+            SUM(plate_appearances) AS plate_appearances,
+            SUM(at_bats) AS at_bats,
+            SUM(hits) AS hits,
+            SUM(singles) AS singles,
+            SUM(doubles) AS doubles,
+            SUM(triples) AS triples,
+            SUM(home_runs) AS home_runs,
+            SUM(walks) AS walks,
+            SUM(strikeouts) AS strikeouts,
+            SUM(runs_batted_in) AS runs_batted_in,
+            SUM(batted_ball_events) AS batted_ball_events,
+            SUM(xba_numerator) AS xba_numerator,
+            SUM(xwoba_numerator) AS xwoba_numerator,
+            SUM(xwoba_denom) AS xwoba_denom,
+            SUM(xslg_numerator) AS xslg_numerator,
+            SUM(hard_hit_bbe) AS hard_hit_bbe,
+            SUM(barrel_bbe) AS barrel_bbe,
+            SUM(launch_speed_sum) AS launch_speed_sum,
+            SUM(launch_speed_count) AS launch_speed_count,
+            MAX(max_launch_speed) AS max_launch_speed,
+            AVG(avg_bat_speed) AS avg_bat_speed,
+            MAX(max_bat_speed) AS max_bat_speed
+        FROM statcast_batter_games
+        WHERE {' AND '.join(clauses)}
+        GROUP BY batter_id
+        """,
+        tuple(parameters),
+    ).fetchall()
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = statcast_batter_metric_values(row)
+        if not passes_sample_threshold(query.metric, metrics):
+            continue
+        metric_value = metrics.get(query.metric.key)
+        if metric_value is None:
+            continue
+        candidates.append(
+            {
+                "player_name": str(row["player_name"] or ""),
+                "metric_value": float(metric_value),
+                "sample_size": float(metrics.get(query.metric.sample_basis or "plate_appearances") or 0.0),
+                "team": str(row["team"] or ""),
+                "plate_appearances": safe_int(row["plate_appearances"]) or 0,
+                "at_bats": safe_int(row["at_bats"]) or 0,
+                "hits": safe_int(row["hits"]) or 0,
+                "doubles": safe_int(row["doubles"]) or 0,
+                "triples": safe_int(row["triples"]) or 0,
+                "home_runs": safe_int(row["home_runs"]) or 0,
+                "walks": safe_int(row["walks"]) or 0,
+                "strikeouts": safe_int(row["strikeouts"]) or 0,
+                "runs_batted_in": safe_int(row["runs_batted_in"]) or 0,
+                "avg": metrics.get("avg"),
+                "obp": metrics.get("obp"),
+                "slg": metrics.get("slg"),
+                "ops": metrics.get("ops"),
+                "xBA": metrics.get("xba"),
+                "xwOBA": metrics.get("xwoba"),
+                "xSLG": metrics.get("xslg"),
+                "hard_hit_rate": metrics.get("hard_hit_rate"),
+                "barrel_rate": metrics.get("barrel_rate"),
+                "avg_exit_velocity": metrics.get("avg_exit_velocity"),
+                "max_exit_velocity": metrics.get("max_exit_velocity"),
+                "avg_bat_speed": metrics.get("avg_bat_speed"),
+                "max_bat_speed": metrics.get("max_bat_speed"),
+                "first_season": safe_int(row["first_season"]) or 0,
+                "last_season": safe_int(row["last_season"]) or 0,
+            }
+        )
+    return rank_rows(candidates, query)
+
+
+def build_statcast_identity_filter(cohort: ResolvedCohort) -> tuple[str | None, tuple[Any, ...]]:
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    if cohort.kind == "manager_era":
+        if cohort.team_name:
+            clauses.append("lower(trim(team_name)) = ?")
+            parameters.append(str(cohort.team_name).strip().lower())
+        if cohort.team_code:
+            clauses.append("upper(team) = ?")
+            parameters.append(str(cohort.team_code).strip().upper())
+    player_names = sorted({name.strip().lower() for name in (cohort.player_names or set()) if str(name).strip()})
+    if player_names:
+        placeholders = ", ".join("?" for _ in player_names)
+        clauses.append(f"lower(trim(batter_name)) IN ({placeholders})")
+        parameters.extend(player_names)
+    if not clauses:
+        return None, tuple()
+    return "(" + " OR ".join(clauses) + ")", tuple(parameters)
+
+
 def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
     if not (table_exists(connection, "lahman_pitching") and table_exists(connection, "lahman_people")):
         return []
@@ -500,6 +628,8 @@ def build_sample_text(query: CohortMetricQuery, row: dict[str, Any]) -> str:
 
 
 def build_citation(query: CohortMetricQuery) -> str:
+    if query.metric.source_family == "statcast":
+        return "Local Statcast batter summaries aggregated from synced public Statcast data"
     if query.cohort.kind == "manager_era":
         return "Lahman managers, batting, pitching, fielding, and people tables"
     return "Lahman people, batting, pitching, and fielding tables"

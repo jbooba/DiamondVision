@@ -118,7 +118,6 @@ def build_test_connection() -> sqlite3.Connection:
         )
         """
     )
-
     con.executemany(
         "INSERT INTO lahman_people(playerid, retroid, namefirst, namelast, birthcountry, bats, throws) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
@@ -127,6 +126,7 @@ def build_test_connection() -> sqlite3.Connection:
             ("nimmbr01", "nimmb001", "Brandon", "Nimmo", "USA", "L", "R"),
             ("devers01", "dever001", "Rafael", "Devers", "Dominican Republic", "L", "R"),
             ("sotoju01", "sotoj001", "Juan", "Soto", "Dominican Republic", "L", "L"),
+            ("ramirjo01", "ramij001", "Jose", "Ramirez", "Dominican Republic", "B", "R"),
         ],
     )
     con.executemany(
@@ -166,6 +166,22 @@ def build_test_connection() -> sqlite3.Connection:
             ("nimmbr01", "2023", "NYN", "152", "560", "102", "154", "25", "4", "24", "68", "3", "0", "72", "166", "2", "0", "5"),
             ("devers01", "2024", "BOS", "138", "516", "87", "140", "34", "0", "28", "83", "3", "0", "67", "166", "6", "0", "5"),
             ("sotoju01", "2024", "NYY", "157", "576", "128", "166", "31", "4", "41", "109", "7", "2", "129", "119", "3", "0", "5"),
+            ("ramirjo01", "2021", "CLE", "152", "552", "111", "147", "32", "5", "36", "103", "27", "7", "72", "83", "7", "0", "4"),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO statcast_batter_games(
+            season, game_date, game_pk, batter_id, batter_name, team, team_name, opponent, opponent_name,
+            plate_appearances, at_bats, hits, singles, doubles, triples, home_runs, walks, strikeouts,
+            runs_batted_in, batted_ball_events, xba_numerator, xwoba_numerator, xwoba_denom, xslg_numerator,
+            hard_hit_bbe, barrel_bbe, launch_speed_sum, launch_speed_count, max_launch_speed, avg_bat_speed,
+            max_bat_speed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (2021, "2021-07-01", 10, 608070, "Jose Ramirez", "CLE", "Cleveland Guardians", "DET", "Detroit Tigers", 40, 36, 12, 8, 2, 0, 2, 4, 8, 9, 24, 9.1, 13.0, 36.0, 16.0, 10, 3, 2290.0, 24, 111.4, 73.8, 76.2),
+            (2021, "2021-07-01", 11, 665742, "Juan Soto", "WSN", "Washington Nationals", "ATL", "Atlanta Braves", 42, 35, 11, 7, 2, 0, 2, 7, 6, 8, 23, 8.4, 13.4, 35.0, 15.2, 8, 2, 2208.0, 23, 110.7, 72.0, 73.5),
         ],
     )
     con.commit()
@@ -218,4 +234,15 @@ def test_hall_of_fame_cohort_resolves() -> None:
     assert snippet is not None
     assert snippet.payload["cohort_kind"] == "hall_of_fame"
     assert snippet.payload["rows"][0]["player_name"] == "Rafael Devers"
+    con.close()
+
+
+def test_switch_hitter_statcast_cohort_resolves_by_average_exit_velocity() -> None:
+    con = build_test_connection()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "highest average exit velocity by a switch hitter in 2021")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "statcast"
+    assert snippet.payload["cohort_kind"] == "bat_handedness"
+    assert snippet.payload["rows"][0]["player_name"] == "Jose Ramirez"
     con.close()
