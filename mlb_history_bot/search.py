@@ -61,6 +61,7 @@ from .storage import (
 from .team_evaluator import TeamEvaluator
 from .team_history_rankings import TeamHistoryRankingResearcher
 from .team_roster_leaders import TeamRosterLeaderResearcher
+from .team_season_leaders import TeamSeasonLeaderResearcher
 from .team_start_similarity import TeamStartSimilarityResearcher
 from .team_season_compare import TeamSeasonComparisonResearcher
 
@@ -115,6 +116,7 @@ class BaseballResearchEngine:
         self.team_evaluator = TeamEvaluator(settings)
         self.team_history_researcher = TeamHistoryRankingResearcher(settings)
         self.team_roster_leader_researcher = TeamRosterLeaderResearcher(settings)
+        self.team_season_leader_researcher = TeamSeasonLeaderResearcher(settings)
         self.team_start_similarity_researcher = TeamStartSimilarityResearcher(settings)
         self.team_season_comparison_researcher = TeamSeasonComparisonResearcher(settings)
         self.retrosheet_situational_researcher = RetrosheetSituationalResearcher(settings)
@@ -169,6 +171,7 @@ class BaseballResearchEngine:
         player_window_snippet = None
         team_eval_snippet = None
         team_roster_leader_snippet = None
+        team_season_leader_snippet = None
         roster_comparison_snippet = None
         team_season_comparison_snippet = None
         team_start_similarity_snippet = None
@@ -284,6 +287,15 @@ class BaseballResearchEngine:
             if team_roster_leader_snippet:
                 context.live_evidence.append(team_roster_leader_snippet)
                 context.classification = team_roster_leader_snippet.payload.get("mode", "live")
+            team_season_leader_snippet = self.team_season_leader_researcher.build_snippet(connection, question)
+            if team_season_leader_snippet:
+                target_collection = (
+                    context.live_evidence
+                    if team_season_leader_snippet.payload.get("mode") in {"live", "hybrid"}
+                    else context.historical_evidence
+                )
+                target_collection.append(team_season_leader_snippet)
+                context.classification = team_season_leader_snippet.payload.get("mode", context.classification)
             team_eval_snippet = None if manager_era_snippet is not None else self.team_evaluator.build_snippet(connection, question)
             if team_eval_snippet:
                 context.live_evidence.append(team_eval_snippet)
@@ -358,6 +370,7 @@ class BaseballResearchEngine:
                 or statcast_relationship_snippet is not None
                 or pitch_arsenal_snippet is not None
                 or team_roster_leader_snippet is not None
+                or team_season_leader_snippet is not None
                 or player_situational_snippet is not None
                 or special_leaderboard_snippet is not None
                 or contextual_performance_snippet is not None
@@ -381,6 +394,7 @@ class BaseballResearchEngine:
                 or statcast_relationship_snippet
                 or pitch_arsenal_snippet
                 or team_roster_leader_snippet
+                or team_season_leader_snippet
                 or player_situational_snippet
                 or team_split_history_snippet
                 or special_leaderboard_snippet
@@ -407,6 +421,7 @@ class BaseballResearchEngine:
                     and player_window_snippet is None
                     and player_season_snippet is None
                     and team_roster_leader_snippet is None
+                    and team_season_leader_snippet is None
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
                     and contextual_performance_snippet is None
@@ -449,6 +464,7 @@ class BaseballResearchEngine:
             and player_window_snippet is None
             and player_season_snippet is None
             and team_roster_leader_snippet is None
+            and team_season_leader_snippet is None
             and team_eval_snippet is None
             and pitch_arsenal_snippet is None
             and roster_comparison_snippet is None
@@ -486,6 +502,7 @@ class BaseballResearchEngine:
             and player_window_snippet is None
             and player_season_snippet is None
             and team_roster_leader_snippet is None
+            and team_season_leader_snippet is None
             and team_eval_snippet is None
             and pitch_arsenal_snippet is None
             and roster_comparison_snippet is None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 CURRENT_SCOPE_HINTS = {
@@ -64,16 +65,36 @@ ROLE_HINTS = {
 }
 
 OFFENSE_METRIC_HINTS = {
+    "games played": "games",
+    "games": "games",
+    "plate appearances": "plate_appearances",
+    "pa": "plate_appearances",
+    "at bats": "at_bats",
+    "ab": "at_bats",
     "ops": "ops",
     "obp": "obp",
     "slg": "slg",
     "avg": "avg",
     "batting average": "avg",
+    "runs scored": "runs",
+    "runs": "runs",
+    "doubles": "doubles",
+    "double": "doubles",
+    "triples": "triples",
+    "triple": "triples",
     "home run": "home_runs",
     "home runs": "home_runs",
     "hr": "home_runs",
     "hits": "hits",
     "rbi": "rbi",
+    "stolen bases": "steals",
+    "stolen base": "steals",
+    "steals": "steals",
+    "sb": "steals",
+    "caught stealing": "caught_stealing",
+    "cs": "caught_stealing",
+    "hit by pitch": "hit_by_pitch",
+    "hbp": "hit_by_pitch",
     "walks": "walks",
     "bb": "walks",
     "strikeouts": "strikeouts",
@@ -81,11 +102,22 @@ OFFENSE_METRIC_HINTS = {
 }
 
 PITCHING_METRIC_HINTS = {
+    "games pitched": "games",
+    "games": "games",
+    "starts": "games_started",
+    "games started": "games_started",
+    "gs": "games_started",
     "era": "era",
     "whip": "whip",
+    "hits allowed": "hits_allowed",
+    "earned runs": "earned_runs",
+    "earned run": "earned_runs",
+    "home runs allowed": "home_runs_allowed",
+    "walks allowed": "walks",
     "strikeouts": "strikeouts",
     "so": "strikeouts",
     "wins": "wins",
+    "losses": "losses",
     "saves": "saves",
     "holds": "holds",
     "innings": "innings",
@@ -95,12 +127,15 @@ PITCHING_METRIC_HINTS = {
 }
 
 FIELDING_METRIC_HINTS = {
+    "games played": "games",
+    "games": "games",
     "fielding percentage": "fielding_pct",
     "fielding pct": "fielding_pct",
     "fielding": "fielding_pct",
     "errors": "errors",
     "assists": "assists",
     "putouts": "putouts",
+    "double plays": "double_plays",
 }
 
 
@@ -113,19 +148,19 @@ class TeamLeaderIntent:
 
 def mentions_current_scope(question: str) -> bool:
     lowered = question.lower()
-    return any(token in lowered for token in CURRENT_SCOPE_HINTS)
+    return any(_contains_hint(lowered, token) for token in CURRENT_SCOPE_HINTS)
 
 
 def is_current_team_status_question(question: str) -> bool:
     lowered = question.lower()
-    return any(token in lowered for token in TEAM_STATUS_HINTS) and mentions_current_scope(question)
+    return any(_contains_hint(lowered, token) for token in TEAM_STATUS_HINTS) and mentions_current_scope(question)
 
 
 def parse_team_leader_intent(question: str) -> TeamLeaderIntent | None:
     lowered = question.lower()
     direction = None
     for token, resolved in LEADER_DIRECTION_HINTS.items():
-        if token in lowered:
+        if _contains_hint(lowered, token):
             direction = resolved
             break
     if direction is None:
@@ -133,18 +168,30 @@ def parse_team_leader_intent(question: str) -> TeamLeaderIntent | None:
 
     role = None
     for token, resolved in ROLE_HINTS.items():
-        if token in lowered:
+        if _contains_hint(lowered, token):
             role = resolved
             break
+    metric = None
+    inferred_role = None
+    for role_name, hints in (
+        ("pitcher", PITCHING_METRIC_HINTS),
+        ("fielder", FIELDING_METRIC_HINTS),
+        ("hitter", OFFENSE_METRIC_HINTS),
+    ):
+        for token, resolved in hints.items():
+            if _contains_hint(lowered, token):
+                metric = resolved
+                inferred_role = role_name
+                break
+        if metric is not None:
+            break
+
+    if role is None:
+        role = inferred_role
     if role is None:
         return None
-
-    metric = infer_default_metric(role)
-    hints = metric_hints_for_role(role)
-    for token, resolved in hints.items():
-        if token in lowered:
-            metric = resolved
-            break
+    if metric is None:
+        metric = infer_default_metric(role)
     return TeamLeaderIntent(direction=direction, role=role, metric=metric)
 
 
@@ -168,5 +215,26 @@ def metric_hints_for_role(role: str) -> dict[str, str]:
     return OFFENSE_METRIC_HINTS
 
 
+def metric_prefers_lower(role: str, metric: str) -> bool:
+    if role in {"pitcher", "starter", "reliever"}:
+        return metric in {
+            "era",
+            "whip",
+            "losses",
+            "hits_allowed",
+            "earned_runs",
+            "home_runs_allowed",
+            "walks",
+        }
+    if role == "fielder":
+        return metric in {"errors"}
+    return metric in {"strikeouts", "caught_stealing"}
+
+
 def is_lower_better_metric(metric: str) -> bool:
-    return metric in {"era", "whip", "errors", "strikeouts"}
+    return metric_prefers_lower("player", metric)
+
+
+def _contains_hint(text: str, token: str) -> bool:
+    pattern = rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])"
+    return re.search(pattern, text) is not None

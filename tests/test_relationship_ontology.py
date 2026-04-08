@@ -23,6 +23,20 @@ def test_parse_team_leader_intent_defaults_best_hitter_to_ops() -> None:
     assert intent.metric == "ops"
 
 
+def test_parse_team_leader_intent_infers_role_from_metric() -> None:
+    intent = parse_team_leader_intent("who had the lowest batting average on the Red Sox in 2024?")
+    assert intent is not None
+    assert intent.direction == "worst"
+    assert intent.role == "hitter"
+    assert intent.metric == "avg"
+
+
+def test_parse_team_leader_intent_avoids_sox_false_positive() -> None:
+    intent = parse_team_leader_intent("who was the best hitter on the Red Sox in 2024?")
+    assert intent is not None
+    assert intent.metric == "ops"
+
+
 def test_build_team_leader_rows_ranks_hitters_by_ops() -> None:
     query = TeamRosterLeaderQuery(
         team=TeamIdentity(

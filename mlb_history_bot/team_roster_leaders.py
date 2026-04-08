@@ -9,7 +9,7 @@ from .live import LiveStatsClient
 from .models import EvidenceSnippet
 from .relationship_ontology import (
     TeamLeaderIntent,
-    is_lower_better_metric,
+    metric_prefers_lower,
     mentions_current_scope,
     parse_team_leader_intent,
 )
@@ -86,7 +86,7 @@ def build_team_leader_rows(people: list[dict[str, Any]], query: TeamRosterLeader
     role = query.intent.role
     metric = query.intent.metric
     direction = query.intent.direction
-    lower_is_better = is_lower_better_metric(metric)
+    lower_is_better = metric_prefers_lower(role, metric)
     higher_is_better = not lower_is_better
     if direction == "worst":
         higher_is_better = not higher_is_better
@@ -156,6 +156,8 @@ def build_hitting_candidate(
     plate_appearances = safe_float(hitting.get("plateAppearances")) or 0.0
     if metric in {"ops", "obp", "slg", "avg"} and plate_appearances < 10:
         return None
+    if metric not in {"ops", "obp", "slg", "avg"} and plate_appearances < 3:
+        return None
     return {
         "player_name": person.get("fullName"),
         "team": team_abbreviation,
@@ -164,12 +166,19 @@ def build_hitting_candidate(
         "sample_size": plate_appearances,
         "games": safe_int(hitting.get("gamesPlayed")) or 0,
         "plate_appearances": int(round(plate_appearances)),
+        "at_bats": safe_int(hitting.get("atBats")) or 0,
+        "runs": safe_int(hitting.get("runs")) or 0,
         "avg": safe_float(hitting.get("avg")),
         "obp": safe_float(hitting.get("obp")),
         "slg": safe_float(hitting.get("slg")),
         "ops": safe_float(hitting.get("ops")),
+        "doubles": safe_int(hitting.get("doubles")) or 0,
+        "triples": safe_int(hitting.get("triples")) or 0,
         "home_runs": safe_int(hitting.get("homeRuns")) or 0,
         "hits": safe_int(hitting.get("hits")) or 0,
+        "steals": safe_int(hitting.get("stolenBases")) or 0,
+        "caught_stealing": safe_int(hitting.get("caughtStealing")) or 0,
+        "hit_by_pitch": safe_int(hitting.get("hitByPitch")) or 0,
         "runs_batted_in": safe_int(hitting.get("rbi")) or 0,
         "walks": safe_int(hitting.get("baseOnBalls")) or 0,
         "strikeouts": safe_int(hitting.get("strikeOuts")) or 0,
@@ -185,6 +194,8 @@ def build_pitching_candidate(
     innings = safe_float(pitching.get("inningsPitched")) or 0.0
     if metric in {"era", "whip", "strikeouts_per_9"} and innings < 5.0:
         return None
+    if metric not in {"era", "whip", "strikeouts_per_9"} and innings <= 0 and (safe_int(pitching.get("gamesPlayed")) or 0) <= 0:
+        return None
     metric_value = select_pitching_metric(pitching, metric)
     return {
         "player_name": person.get("fullName"),
@@ -198,8 +209,13 @@ def build_pitching_candidate(
         "era": safe_float(pitching.get("era")),
         "whip": safe_float(pitching.get("whip")),
         "wins": safe_int(pitching.get("wins")) or 0,
+        "losses": safe_int(pitching.get("losses")) or 0,
         "saves": safe_int(pitching.get("saves")) or 0,
         "holds": safe_int(pitching.get("holds")) or 0,
+        "hits_allowed": safe_int(pitching.get("hits")) or 0,
+        "earned_runs": safe_int(pitching.get("earnedRuns")) or 0,
+        "home_runs_allowed": safe_int(pitching.get("homeRuns")) or 0,
+        "walks": safe_int(pitching.get("baseOnBalls")) or 0,
         "strikeouts": safe_int(pitching.get("strikeOuts")) or 0,
         "strikeouts_per_9": safe_float(pitching.get("strikeoutsPer9Inn")),
     }
@@ -227,18 +243,28 @@ def build_fielding_candidate(
         "errors": safe_int(fielding.get("errors")) or 0,
         "assists": safe_int(fielding.get("assists")) or 0,
         "putouts": safe_int(fielding.get("putOuts")) or 0,
+        "double_plays": safe_int(fielding.get("doublePlays")) or 0,
     }
 
 
 def select_hitting_metric(hitting: dict[str, Any], metric: str) -> float | None:
     return {
+        "games": safe_float(hitting.get("gamesPlayed")),
+        "plate_appearances": safe_float(hitting.get("plateAppearances")),
+        "at_bats": safe_float(hitting.get("atBats")),
         "ops": safe_float(hitting.get("ops")),
         "obp": safe_float(hitting.get("obp")),
         "slg": safe_float(hitting.get("slg")),
         "avg": safe_float(hitting.get("avg")),
+        "runs": safe_float(hitting.get("runs")),
+        "doubles": safe_float(hitting.get("doubles")),
+        "triples": safe_float(hitting.get("triples")),
         "home_runs": safe_float(hitting.get("homeRuns")),
         "hits": safe_float(hitting.get("hits")),
         "rbi": safe_float(hitting.get("rbi")),
+        "steals": safe_float(hitting.get("stolenBases")),
+        "caught_stealing": safe_float(hitting.get("caughtStealing")),
+        "hit_by_pitch": safe_float(hitting.get("hitByPitch")),
         "walks": safe_float(hitting.get("baseOnBalls")),
         "strikeouts": safe_float(hitting.get("strikeOuts")),
     }.get(metric)
@@ -246,10 +272,17 @@ def select_hitting_metric(hitting: dict[str, Any], metric: str) -> float | None:
 
 def select_pitching_metric(pitching: dict[str, Any], metric: str) -> float | None:
     return {
+        "games": safe_float(pitching.get("gamesPlayed")),
+        "games_started": safe_float(pitching.get("gamesStarted")),
         "era": safe_float(pitching.get("era")),
         "whip": safe_float(pitching.get("whip")),
+        "hits_allowed": safe_float(pitching.get("hits")),
+        "earned_runs": safe_float(pitching.get("earnedRuns")),
+        "home_runs_allowed": safe_float(pitching.get("homeRuns")),
+        "walks": safe_float(pitching.get("baseOnBalls")),
         "strikeouts": safe_float(pitching.get("strikeOuts")),
         "wins": safe_float(pitching.get("wins")),
+        "losses": safe_float(pitching.get("losses")),
         "saves": safe_float(pitching.get("saves")),
         "holds": safe_float(pitching.get("holds")),
         "innings": safe_float(pitching.get("inningsPitched")),
@@ -259,10 +292,12 @@ def select_pitching_metric(pitching: dict[str, Any], metric: str) -> float | Non
 
 def select_fielding_metric(fielding: dict[str, Any], metric: str) -> float | None:
     return {
+        "games": safe_float(fielding.get("gamesPlayed")),
         "fielding_pct": safe_float(fielding.get("fielding")),
         "errors": safe_float(fielding.get("errors")),
         "assists": safe_float(fielding.get("assists")),
         "putouts": safe_float(fielding.get("putOuts")),
+        "double_plays": safe_float(fielding.get("doublePlays")),
     }.get(metric)
 
 
@@ -272,22 +307,37 @@ def metric_label(metric: str) -> str:
         "obp": "OBP",
         "slg": "SLG",
         "avg": "AVG",
+        "games": "G",
+        "plate_appearances": "PA",
+        "at_bats": "AB",
+        "runs": "Runs",
+        "doubles": "2B",
+        "triples": "3B",
         "home_runs": "HR",
         "hits": "Hits",
         "rbi": "RBI",
+        "steals": "SB",
+        "caught_stealing": "CS",
+        "hit_by_pitch": "HBP",
         "walks": "BB",
         "strikeouts": "SO",
         "era": "ERA",
         "whip": "WHIP",
         "wins": "Wins",
+        "losses": "Losses",
         "saves": "Saves",
         "holds": "Holds",
         "innings": "IP",
+        "games_started": "GS",
+        "hits_allowed": "H Allowed",
+        "earned_runs": "ER",
+        "home_runs_allowed": "HR Allowed",
         "strikeouts_per_9": "K/9",
         "fielding_pct": "Fld%",
         "errors": "Errors",
         "assists": "Assists",
         "putouts": "Putouts",
+        "double_plays": "DP",
     }.get(metric, metric)
 
 

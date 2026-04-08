@@ -541,7 +541,7 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 rows,
             )
 
-    if analysis_type == "team_roster_leaderboard":
+    if analysis_type in {"team_roster_leaderboard", "team_season_leaderboard"}:
         rows = payload.get("rows")
         metric_label = str(payload.get("metric") or "Metric")
         role = str(payload.get("role") or "")
@@ -556,11 +556,15 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 columns.extend(
                     [
                         {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "runs", "label": "R", "align": "right"},
                         {"key": "avg", "label": "AVG", "align": "right"},
                         {"key": "obp", "label": "OBP", "align": "right"},
                         {"key": "slg", "label": "SLG", "align": "right"},
                         {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "doubles", "label": "2B", "align": "right"},
+                        {"key": "triples", "label": "3B", "align": "right"},
                         {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "steals", "label": "SB", "align": "right"},
                         {"key": "runs_batted_in", "label": "RBI", "align": "right"},
                     ]
                 )
@@ -573,8 +577,11 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                         {"key": "whip", "label": "WHIP", "align": "right"},
                         {"key": "strikeouts", "label": "SO", "align": "right"},
                         {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "losses", "label": "L", "align": "right"},
                         {"key": "saves", "label": "SV", "align": "right"},
                         {"key": "holds", "label": "HLD", "align": "right"},
+                        {"key": "hits_allowed", "label": "H Allowed", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
                     ]
                 )
             else:
@@ -585,6 +592,7 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                         {"key": "errors", "label": "E", "align": "right"},
                         {"key": "assists", "label": "A", "align": "right"},
                         {"key": "putouts", "label": "PO", "align": "right"},
+                        {"key": "double_plays", "label": "DP", "align": "right"},
                     ]
                 )
             return build_table_display(columns, rows)
