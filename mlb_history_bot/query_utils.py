@@ -132,6 +132,17 @@ LOWERCASE_NAME_LEADIN_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bshow\s+me\s+(?:a|an|the)\s+([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})"
+        r"(?=\s+(?:home\s+runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?|hits?|singles?|doubles?|triples?|"
+        r"strikeouts?|walks?|stolen\s+bases?|defensive|fielding|batting|pitching)\b|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bshow\s+me\s+(?:a|an|the)\s+([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})\s+"
+        r"(?:home\s*-?\s*runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bshow\s+me\s+(?!the\b|a\b|an\b)([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})"
         r"(?=\s+(?:home\s+runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?|hits?|singles?|doubles?|triples?|"
         r"strikeouts?|walks?|stolen\s+bases?|defensive|fielding|batting|pitching))",

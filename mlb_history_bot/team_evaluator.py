@@ -420,6 +420,7 @@ def build_team_aliases(team: dict[str, Any]) -> set[str]:
     team_code = str(team.get("teamCode") or "").strip()
     aliases = {
         name,
+        location,
         short_name,
         club_name,
         franchise_name,

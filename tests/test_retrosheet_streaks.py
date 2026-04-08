@@ -169,6 +169,11 @@ def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Pa
         assert hr_ab_snippet.payload["rows"][0]["player_name"] == "Slugger Jones"
         assert hr_ab_snippet.payload["rows"][0]["streak_length"] == 4
 
+        hr_streak_snippet = researcher.build_snippet(connection, "most consecutive homeruns by one player")
+        assert hr_streak_snippet is not None
+        assert hr_streak_snippet.payload["rows"][0]["player_name"] == "Matt Stairs"
+        assert hr_streak_snippet.payload["rows"][0]["streak_length"] == 2
+
         pitcher_walks_snippet = researcher.build_snippet(connection, "what is the most consecutive walks recorded by a pitcher in a single game")
         assert pitcher_walks_snippet is not None
         assert pitcher_walks_snippet.payload["rows"][0]["player_name"] == "Pitcher Ace"

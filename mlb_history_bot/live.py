@@ -25,8 +25,11 @@ class LiveStatsClient:
                 "Accept": "application/json",
             },
         )
-        with urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
         self._json_cache[url] = payload
         return payload
 

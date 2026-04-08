@@ -512,7 +512,11 @@ class BaseballResearchEngine:
             context.replay_evidence.extend(hr_robbery_snippets)
 
         sporty_replay_snippets: list[EvidenceSnippet] = []
-        if (
+        should_try_sporty_replay = (
+            replay_focused
+            and not story_snippets
+            and not hr_robbery_snippets
+        ) or (
             not story_snippets
             and daily_lookup_snippet is None
             and live_game_snippet is None
@@ -548,7 +552,8 @@ class BaseballResearchEngine:
             and provider_metric_snippet is None
             and metric_gap_snippet is None
             and not hr_robbery_snippets
-        ):
+        )
+        if should_try_sporty_replay:
             sporty_replay_snippets = self.sporty_replay_finder.build_snippets(question)
             context.replay_evidence.extend(sporty_replay_snippets)
 

@@ -76,7 +76,21 @@ class StatcastRelationshipResearcher:
             if rows:
                 store_cached_relationship_rows(self.settings, query, rows)
         if not rows:
-            return None
+            return EvidenceSnippet(
+                source="Statcast Relationships",
+                title=f"{query.scope_label} Statcast relationship query",
+                citation="local compact Statcast event index plus bounded raw Statcast fallback",
+                summary=build_statcast_relationship_gap_summary(query),
+                payload={
+                    "analysis_type": "contextual_source_gap",
+                    "mode": "live" if query.scope_label in {str(current_season), "today", "yesterday", "this week", "last week"} else "historical",
+                    "scope_label": query.scope_label,
+                    "pitch_family": query.pitch_family,
+                    "batter_filter": query.batter_filter,
+                    "pitcher_filter": query.pitcher_filter,
+                    "event_filter": sorted(query.event_filter) if query.event_filter else [],
+                },
+            )
         clips = (
             build_statcast_relationship_clips(rows, self.live_client, self.sporty_video_client)
             if query.mode == "events" and query.wants_visuals
@@ -175,6 +189,7 @@ def extract_batter_filter(question: str, lowered: str) -> str | None:
         if match is None:
             continue
         candidate = re.sub(r"'s\b", "", match.group(1), flags=re.IGNORECASE).strip(" ?.!,'\"")
+        candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate, flags=re.IGNORECASE)
         candidate = re.sub(r"^(?:clips?|videos?|replays?|highlights?)\s+of\s+", "", candidate, flags=re.IGNORECASE)
         if " " not in candidate:
             return None
@@ -407,15 +422,15 @@ def build_local_event_filters(
         clauses.append(f"batter_id IN ({placeholders})")
         params.extend(sorted(batter_ids))
     elif query.batter_filter:
-        clauses.append("LOWER(batter_name) = ?")
-        params.append(normalize_name(query.batter_filter))
+        clauses.append("LOWER(batter_name) LIKE ?")
+        params.append(f"%{normalize_name(query.batter_filter)}%")
     if pitcher_ids:
         placeholders = ", ".join("?" for _ in pitcher_ids)
         clauses.append(f"pitcher_id IN ({placeholders})")
         params.extend(sorted(pitcher_ids))
     elif query.pitcher_filter:
-        clauses.append("LOWER(pitcher_name) = ?")
-        params.append(normalize_name(query.pitcher_filter))
+        clauses.append("LOWER(pitcher_name) LIKE ?")
+        params.append(f"%{normalize_name(query.pitcher_filter)}%")
     return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
@@ -774,6 +789,37 @@ def build_statcast_relationship_summary(
         summary = f"{summary} Spin: {format_metric(lead.get('release_spin_rate'))} rpm."
     elif query.metric_threshold_key == "release_speed":
         summary = f"{summary} Velocity: {format_metric(lead.get('release_speed'))} mph."
+    return append_location_summary(summary, query)
+
+
+def build_statcast_relationship_gap_summary(query: StatcastRelationshipQuery) -> str:
+    filter_bits: list[str] = []
+    if query.batter_filter:
+        filter_bits.append(query.batter_filter)
+    if query.event_filter == {"home_run"}:
+        filter_bits.append("home runs")
+    elif query.event_filter == HIT_EVENTS:
+        filter_bits.append("hits")
+    elif query.event_filter == STRIKEOUT_EVENTS:
+        filter_bits.append("strikeouts")
+    elif query.event_filter:
+        filter_bits.append("filtered events")
+    if query.pitch_family:
+        filter_bits.append(f"off {query.pitch_family}s")
+    location_label = format_location_label(query.horizontal_location, query.vertical_location)
+    if location_label:
+        filter_bits.append(location_label)
+    if query.metric_threshold_key == "release_speed" and query.metric_threshold_value is not None:
+        filter_bits.append(f"over {int(query.metric_threshold_value)} mph")
+    filter_text = " ".join(filter_bits).strip() or "that filtered Statcast event set"
+    summary = (
+        f"I understood this as a local Statcast relationship query for {filter_text} across {query.scope_label}, "
+        "but the synced event warehouse and bounded raw fallback did not return any matching tracked rows."
+    )
+    if query.aggregate_by == "pitcher":
+        summary = f"{summary} So I can't verify a pitcher leaderboard from the local Statcast data for that exact filter."
+    else:
+        summary = f"{summary} So I can't verify matching plays or clips from the local Statcast data for that exact filter."
     return append_location_summary(summary, query)
 
 

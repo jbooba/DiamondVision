@@ -35,12 +35,21 @@ PLAYER_HOME_RUN_HINTS = (
     " homers",
 )
 DATE_LABELS = {"today", "yesterday", "last night", "tonight"}
+SCORING_BREAKDOWN_HINTS = (
+    "how did",
+    "score their runs",
+    "score its runs",
+    "how were the runs scored",
+    "how was the scoring done",
+    "scoring plays",
+)
 
 
 @dataclass(slots=True)
 class TeamGameQuery:
     team: TeamIdentity
     date_window: DateWindow
+    wants_scoring_breakdown: bool = False
 
 
 @dataclass(slots=True)
@@ -172,16 +181,20 @@ class LiveGameResearcher:
 def parse_team_game_query(question: str, live_client: LiveStatsClient, current_year: int) -> TeamGameQuery | None:
     lowered = question.lower()
     date_window = extract_recent_window(question, current_year, allowed_labels=DATE_LABELS)
+    wants_scoring_breakdown = any(hint in lowered for hint in SCORING_BREAKDOWN_HINTS) and "run" in lowered
+    if date_window is None and ("right now" in lowered or wants_scoring_breakdown):
+        today = date.today()
+        date_window = DateWindow(start_date=today, end_date=today, label="today")
     if date_window is None or not date_window.is_single_day:
         return None
-    if not any(hint in lowered for hint in TEAM_GAME_HINTS):
+    if not any(hint in lowered for hint in TEAM_GAME_HINTS) and not wants_scoring_breakdown:
         return None
     if any(hint in lowered for hint in PLAYER_HOME_RUN_HINTS):
         return None
     team = resolve_team_from_question(question, live_client.teams(current_year))
     if team is None:
         return None
-    return TeamGameQuery(team=team, date_window=date_window)
+    return TeamGameQuery(team=team, date_window=date_window, wants_scoring_breakdown=wants_scoring_breakdown)
 
 
 def parse_player_day_home_run_query(question: str, current_year: int) -> PlayerDayHomeRunQuery | None:
@@ -225,10 +238,18 @@ def build_team_game_snippet(team: TeamIdentity, target_date: str, game: dict[str
     top_hitters = summarize_top_hitters(feed, team.team_id)
     top_pitchers = summarize_top_pitchers(feed, team.team_id)
     scoring_clips = collect_scoring_clips(target_date, int(game["gamePk"]), feed)
+    scoring_plays = collect_scoring_play_rows(feed, away_name=away_name, home_name=home_name, away_team_id=int(away_team.get("id") or 0), home_team_id=int(home_team.get("id") or 0))
+    team_scoring_plays = [row for row in scoring_plays if row["batting_team_id"] == team.team_id]
     summary = (
         f"The {team.club_name} {result_word} on {target_date}: "
         f"{away_name} {away_score if away_score is not None else 0} at {home_name} {home_score if home_score is not None else 0} ({status})."
     )
+    if team_scoring_plays:
+        scoring_text = "; ".join(
+            f"{ordinal(int(row['inning']))} {row['half_inning']}: {row['description']}"
+            for row in team_scoring_plays[:4]
+        )
+        summary = f"{summary} Scoring plays for {team.club_name}: {scoring_text}."
     if top_hitters:
         summary = f"{summary} Best bats: {'; '.join(top_hitters)}."
     if top_pitchers:
@@ -248,6 +269,7 @@ def build_team_game_snippet(team: TeamIdentity, target_date: str, game: dict[str
             "team_score": team_score,
             "opponent_score": opponent_score,
             "clips": scoring_clips,
+            "scoring_plays": team_scoring_plays,
             "rows": [
                 {
                     "team": away_name,
@@ -334,6 +356,37 @@ def team_boxscore_players(feed: dict[str, Any], team_id: int) -> list[dict[str, 
         if int(side_payload.get("team", {}).get("id") or 0) == team_id:
             return list((side_payload.get("players") or {}).values())
     return []
+
+
+def collect_scoring_play_rows(
+    feed: dict[str, Any],
+    *,
+    away_name: str,
+    home_name: str,
+    away_team_id: int,
+    home_team_id: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for play in feed.get("liveData", {}).get("plays", {}).get("allPlays", []):
+        runs_scored = sum(1 for runner in play.get("runners", []) if runner.get("details", {}).get("isScoringEvent"))
+        if runs_scored <= 0:
+            continue
+        half_inning = str(play.get("about", {}).get("halfInning") or "")
+        batting_team_id = away_team_id if half_inning == "top" else home_team_id
+        batting_team_name = away_name if half_inning == "top" else home_name
+        rows.append(
+            {
+                "inning": int(play.get("about", {}).get("inning") or 0),
+                "half_inning": half_inning,
+                "description": str(play.get("result", {}).get("description") or ""),
+                "runs_scored": runs_scored,
+                "batting_team_id": batting_team_id,
+                "batting_team_name": batting_team_name,
+                "batter_name": str(play.get("matchup", {}).get("batter", {}).get("fullName") or ""),
+                "pitcher_name": str(play.get("matchup", {}).get("pitcher", {}).get("fullName") or ""),
+            }
+        )
+    return rows
 
 
 def innings_text_to_outs(value: Any) -> int:

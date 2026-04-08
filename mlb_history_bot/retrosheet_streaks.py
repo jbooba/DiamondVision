@@ -71,7 +71,7 @@ HITLESS_STREAK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 HOME_RUN_STREAK_PATTERN = re.compile(
-    r"\bhome run streak\b|\bhomer streak\b|\bconsecutive games?\b.*\bwith\b.*\bhome runs?\b|\bgames?\b.*\bwith\b.*\bhome runs?\b",
+    r"\bhome run streak\b|\bhomer streak\b|\bmost consecutive\b.*\bhome\s*-?\s*runs?\b|\bconsecutive\b.*\bhome\s*-?\s*runs?\b.*\bby\b|\bconsecutive games?\b.*\bwith\b.*\bhome runs?\b|\bgames?\b.*\bwith\b.*\bhome runs?\b",
     re.IGNORECASE,
 )
 HOME_RUNLESS_STREAK_PATTERN = re.compile(

@@ -10,6 +10,7 @@ from .live import LiveStatsClient
 from .models import EvidenceSnippet
 from .query_utils import extract_name_candidates, extract_target_date, normalize_person_name, ordinal
 from .sporty_video import SportyVideoClient
+from .storage import get_connection, table_exists
 
 
 VISUAL_HINTS = {"clip", "clips", "video", "videos", "replay", "replays", "tape", "highlight", "highlights", "watch"}
@@ -31,7 +32,7 @@ FIELDER_DESCRIPTION_PATTERN = (
     r"(?:pitcher|catcher|first baseman|second baseman|third baseman|shortstop|left fielder|center fielder|right fielder)"
 )
 TAG_PATTERNS = {
-    "home run": ("home run", "homer", "homers", "go-ahead shot", "solo shot", "grand slam"),
+    "home run": ("home run", "homer", "homers", "homerun", "homeruns", "go-ahead shot", "solo shot", "grand slam"),
     "robbery": ("rob ", "robbed", "robbery", "robs", "took away"),
     "defense": (
         "defense",
@@ -237,7 +238,9 @@ class SportyReplayFinder:
                 clip.title,
             )
         )
-        return clips[:6]
+        if clips:
+            return clips[:6]
+        return self._fallback_recent_home_run_clips(replay_query, players_by_id)[:6]
 
     def _schedule_payload(self, replay_query: ReplayQuery, players_by_id: dict[int, str]) -> dict[str, Any]:
         if replay_query.start_date == replay_query.end_date:
@@ -299,6 +302,121 @@ class SportyReplayFinder:
             },
         )
 
+    def _fallback_recent_home_run_clips(
+        self,
+        replay_query: ReplayQuery,
+        players_by_id: dict[int, str],
+    ) -> list[SportyReplayClip]:
+        if not self._is_simple_recent_home_run_request(replay_query, players_by_id):
+            return []
+        connection = get_connection(self.settings.database_path)
+        try:
+            if not table_exists(connection, "statcast_events"):
+                return []
+            candidate_rows = []
+            for player_id in players_by_id:
+                candidate_rows.extend(
+                    connection.execute(
+                        """
+                        SELECT
+                            game_pk,
+                            game_date,
+                            at_bat_number,
+                            batter_id,
+                            batter_name,
+                            pitcher_name,
+                            away_team || ' @ ' || home_team AS team_matchup,
+                            launch_speed,
+                            launch_angle,
+                            hit_distance
+                        FROM statcast_events
+                        WHERE batter_id = ?
+                          AND event = 'home_run'
+                        ORDER BY season DESC, game_date DESC, game_pk DESC, at_bat_number DESC
+                        LIMIT 12
+                        """,
+                        (player_id,),
+                    ).fetchall()
+                )
+        finally:
+            connection.close()
+
+        for row in candidate_rows:
+            game_pk = int(row["game_pk"] or 0)
+            if not game_pk:
+                continue
+            feed = self.live_client.game_feed(game_pk)
+            play = self._find_matching_home_run_play(feed, int(row["batter_id"] or 0), int(row["at_bat_number"] or 0))
+            if play is None:
+                continue
+            play_id = extract_play_id(play)
+            sporty_page = self.sporty_video_client.fetch(play_id) if play_id else None
+            title = sporty_page.title if sporty_page and sporty_page.title else str(play.get("result", {}).get("description") or "")
+            batter_name = (
+                sporty_page.batter
+                if sporty_page and sporty_page.batter
+                else str(row["batter_name"] or play.get("matchup", {}).get("batter", {}).get("fullName") or "").strip()
+            )
+            pitcher_name = (
+                sporty_page.pitcher
+                if sporty_page and sporty_page.pitcher
+                else str(row["pitcher_name"] or play.get("matchup", {}).get("pitcher", {}).get("fullName") or "").strip()
+            )
+            return [
+                SportyReplayClip(
+                    play_id=play_id or "",
+                    game_pk=game_pk,
+                    game_date=str(row["game_date"] or ""),
+                    title=title,
+                    description=str(play.get("result", {}).get("description") or title),
+                    inning=int(play.get("about", {}).get("inning") or 0),
+                    half_inning=str(play.get("about", {}).get("halfInning") or ""),
+                    team_matchup=str(row["team_matchup"] or ""),
+                    batter_name=batter_name,
+                    pitcher_name=pitcher_name,
+                    fielder_name=find_primary_fielder_name(play),
+                    actor_name=batter_name,
+                    actor_roles=["batter"],
+                    match_tags=["home run"],
+                    relevance_score=250,
+                    relevance_reason="Recent Statcast home run fallback for a generic replay request.",
+                    savant_url=sporty_page.savant_url if sporty_page else (f"https://baseballsavant.mlb.com/sporty-videos?playId={play_id}" if play_id else ""),
+                    mp4_url=sporty_page.mp4_url if sporty_page else None,
+                    exit_velocity=(sporty_page.exit_velocity if sporty_page and sporty_page.exit_velocity is not None else float(row["launch_speed"]) if row["launch_speed"] is not None else None),
+                    launch_angle=(sporty_page.launch_angle if sporty_page and sporty_page.launch_angle is not None else float(row["launch_angle"]) if row["launch_angle"] is not None else None),
+                    hit_distance=(sporty_page.hit_distance if sporty_page and sporty_page.hit_distance is not None else float(row["hit_distance"]) if row["hit_distance"] is not None else None),
+                    hr_parks=sporty_page.hr_parks if sporty_page else None,
+                )
+            ]
+        return []
+
+    def _is_simple_recent_home_run_request(
+        self,
+        replay_query: ReplayQuery,
+        players_by_id: dict[int, str],
+    ) -> bool:
+        if replay_query.start_date == replay_query.end_date:
+            return False
+        if len(replay_query.player_queries) != 1 or not players_by_id:
+            return False
+        replay_tags = set(replay_query.replay_tags)
+        return bool(replay_tags) and replay_tags <= {"home run"}
+
+    @staticmethod
+    def _find_matching_home_run_play(feed: dict[str, Any], batter_id: int, at_bat_number: int) -> dict[str, Any] | None:
+        for play in feed.get("liveData", {}).get("plays", {}).get("allPlays", []):
+            if int(play.get("matchup", {}).get("batter", {}).get("id") or 0) != batter_id:
+                continue
+            if int(play.get("about", {}).get("atBatIndex") or -1) == at_bat_number - 1:
+                event_type = str(play.get("result", {}).get("eventType") or "").lower()
+                if event_type == "home_run":
+                    return play
+            if int(play.get("atBatIndex") or -1) == at_bat_number - 1:
+                event_type = str(play.get("result", {}).get("eventType") or "").lower()
+                if event_type == "home_run":
+                    return play
+        return None
+
 
 def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
     target_date = extract_target_date(question, default_year)
@@ -315,7 +433,7 @@ def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
         return None
     if target_date is None:
         end_date = resolve_recent_replay_end_date(default_year)
-        start_date = end_date - timedelta(days=400)
+        start_date = end_date - timedelta(days=120)
         return ReplayQuery(
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
