@@ -10,6 +10,7 @@ from .config import Settings
 from .contextual_performance import sync_retrosheet_player_count_splits, sync_retrosheet_player_opponent_contexts
 from .fielding_bible import snapshot_current_drs_leaderboards, sync_fielding_bible_data
 from .ingest import ingest_project_data
+from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
 from .statcast_sync import sync_statcast_data
 
@@ -37,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--retrosheet-count-chunk-size", type=int, default=250000)
     prepare_parser.add_argument("--with-retrosheet-contexts", action="store_true")
     prepare_parser.add_argument("--retrosheet-context-chunk-size", type=int, default=250000)
+    prepare_parser.add_argument("--with-retrosheet-streaks", action="store_true")
+    prepare_parser.add_argument("--retrosheet-streak-chunk-size", type=int, default=250000)
 
     bootstrap_parser = subparsers.add_parser("bootstrap", help="Download Lahman and Retrosheet core files")
     bootstrap_parser.add_argument("--include-retrosheet-plays", action="store_true")
@@ -61,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--retrosheet-count-chunk-size", type=int, default=250000)
     ingest_parser.add_argument("--with-retrosheet-contexts", action="store_true")
     ingest_parser.add_argument("--retrosheet-context-chunk-size", type=int, default=250000)
+    ingest_parser.add_argument("--with-retrosheet-streaks", action="store_true")
+    ingest_parser.add_argument("--retrosheet-streak-chunk-size", type=int, default=250000)
 
     sync_drs_parser = subparsers.add_parser("sync-drs", help="Sync exact Fielding Bible/SIS DRS datasets")
     sync_drs_parser.add_argument("--start-season", type=int)
@@ -106,6 +111,13 @@ def build_parser() -> argparse.ArgumentParser:
     retrosheet_context_parser.add_argument("--retrosheet-dir", type=Path)
     retrosheet_context_parser.add_argument("--chunk-size", type=int, default=250000)
 
+    retrosheet_streak_parser = subparsers.add_parser(
+        "sync-retrosheet-streaks",
+        help="Build compact historical streak records from Retrosheet plays and batting logs",
+    )
+    retrosheet_streak_parser.add_argument("--retrosheet-dir", type=Path)
+    retrosheet_streak_parser.add_argument("--chunk-size", type=int, default=250000)
+
     ask_parser = subparsers.add_parser("ask", help="Ask one question")
     ask_parser.add_argument("question", type=str)
     ask_parser.add_argument("--session-id", type=str)
@@ -126,7 +138,12 @@ def main() -> int:
     if args.command == "prepare":
         result = bootstrap_datasets(
             settings,
-            include_retrosheet_plays=args.include_retrosheet_plays or args.with_retrosheet_splits,
+            include_retrosheet_plays=(
+                args.include_retrosheet_plays
+                or args.with_retrosheet_splits
+                or args.with_retrosheet_counts
+                or args.with_retrosheet_streaks
+            ),
         )
         messages = ingest_project_data(
             settings,
@@ -149,6 +166,8 @@ def main() -> int:
             retrosheet_count_chunk_size=args.retrosheet_count_chunk_size,
             include_retrosheet_contexts=args.with_retrosheet_contexts,
             retrosheet_context_chunk_size=args.retrosheet_context_chunk_size,
+            include_retrosheet_streaks=args.with_retrosheet_streaks,
+            retrosheet_streak_chunk_size=args.retrosheet_streak_chunk_size,
         )
         for message in messages:
             print(message)
@@ -182,6 +201,8 @@ def main() -> int:
             retrosheet_count_chunk_size=args.retrosheet_count_chunk_size,
             include_retrosheet_contexts=args.with_retrosheet_contexts,
             retrosheet_context_chunk_size=args.retrosheet_context_chunk_size,
+            include_retrosheet_streaks=args.with_retrosheet_streaks,
+            retrosheet_streak_chunk_size=args.retrosheet_streak_chunk_size,
         )
         for message in messages:
             print(message)
@@ -241,6 +262,16 @@ def main() -> int:
 
     if args.command == "sync-retrosheet-contexts":
         messages = sync_retrosheet_player_opponent_contexts(
+            settings,
+            retrosheet_dir=args.retrosheet_dir or settings.raw_data_dir / "retrosheet",
+            chunk_size=args.chunk_size,
+        )
+        for message in messages:
+            print(message)
+        return 0
+
+    if args.command == "sync-retrosheet-streaks":
+        messages = sync_retrosheet_player_streaks(
             settings,
             retrosheet_dir=args.retrosheet_dir or settings.raw_data_dir / "retrosheet",
             chunk_size=args.chunk_size,

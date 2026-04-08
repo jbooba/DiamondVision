@@ -6,6 +6,7 @@ from .config import Settings
 from .contextual_performance import sync_retrosheet_player_count_splits, sync_retrosheet_player_opponent_contexts
 from .fielding_bible import snapshot_current_drs_leaderboards, sync_fielding_bible_data
 from .metrics import MetricCatalog
+from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
 from .statcast_sync import sync_statcast_data
 from .storage import (
@@ -40,6 +41,8 @@ def ingest_project_data(
     retrosheet_count_chunk_size: int = 250_000,
     include_retrosheet_contexts: bool = False,
     retrosheet_context_chunk_size: int = 250_000,
+    include_retrosheet_streaks: bool = False,
+    retrosheet_streak_chunk_size: int = 250_000,
 ) -> list[str]:
     settings.ensure_directories()
     notes: list[str] = []
@@ -106,6 +109,14 @@ def ingest_project_data(
                 settings,
                 retrosheet_dir=retrosheet_dir,
                 chunk_size=retrosheet_context_chunk_size,
+            )
+        )
+    if include_retrosheet_streaks:
+        notes.extend(
+            sync_retrosheet_player_streaks(
+                settings,
+                retrosheet_dir=retrosheet_dir,
+                chunk_size=retrosheet_streak_chunk_size,
             )
         )
     if not notes:

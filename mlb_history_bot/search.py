@@ -44,6 +44,7 @@ from .query_utils import (
     question_mentions_yearless_month_day,
 )
 from .retrosheet_splits import RetrosheetSituationalResearcher
+from .retrosheet_streaks import RetrosheetStreakResearcher
 from .roster_comparison import RosterComparisonResearcher
 from .salary_relationships import SalaryRelationshipResearcher
 from .season_metric_leaderboards import SeasonMetricLeaderboardResearcher
@@ -127,6 +128,7 @@ class BaseballResearchEngine:
         self.team_start_similarity_researcher = TeamStartSimilarityResearcher(settings)
         self.team_season_comparison_researcher = TeamSeasonComparisonResearcher(settings)
         self.retrosheet_situational_researcher = RetrosheetSituationalResearcher(settings)
+        self.retrosheet_streak_researcher = RetrosheetStreakResearcher(settings)
         self.special_leaderboard_researcher = SpecialLeaderboardResearcher(settings)
         self.statcast_event_researcher = StatcastEventResearcher(settings)
         self.statcast_relationship_researcher = StatcastRelationshipResearcher(settings)
@@ -190,6 +192,7 @@ class BaseballResearchEngine:
         pitch_arsenal_snippet = None
         team_history_snippet = None
         team_split_history_snippet = None
+        retrosheet_streak_snippet = None
         contextual_performance_snippet = None
         special_leaderboard_snippet = None
         salary_relationship_snippet = None
@@ -351,8 +354,11 @@ class BaseballResearchEngine:
             team_split_history_snippet = self.retrosheet_situational_researcher.build_snippet(connection, question)
             if team_split_history_snippet:
                 context.historical_evidence.append(team_split_history_snippet)
+            retrosheet_streak_snippet = self.retrosheet_streak_researcher.build_snippet(connection, question)
+            if retrosheet_streak_snippet:
+                context.historical_evidence.append(retrosheet_streak_snippet)
             team_history_snippet = self.team_history_researcher.build_snippet(connection, question)
-            if team_history_snippet and team_split_history_snippet is None:
+            if team_history_snippet and team_split_history_snippet is None and retrosheet_streak_snippet is None:
                 context.historical_evidence.append(team_history_snippet)
             if not (cohort_filter_requested and cohort_metric_snippet is None):
                 season_metric_snippet = self.season_metric_researcher.build_snippet(connection, question)
@@ -409,6 +415,7 @@ class BaseballResearchEngine:
                 or manager_era_snippet is not None
                 or season_metric_snippet is not None
                 or salary_relationship_snippet is not None
+                or retrosheet_streak_snippet is not None
                 else self.provider_metric_researcher.build_snippet(question)
             )
             if provider_metric_snippet:
@@ -432,6 +439,7 @@ class BaseballResearchEngine:
                 or season_metric_snippet
                 or player_situational_snippet
                 or team_split_history_snippet
+                or retrosheet_streak_snippet
                 or special_leaderboard_snippet
                 or contextual_performance_snippet
                 or salary_relationship_snippet
@@ -461,6 +469,7 @@ class BaseballResearchEngine:
                     and team_season_leader_snippet is None
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
+                    and retrosheet_streak_snippet is None
                     and contextual_performance_snippet is None
                     and cohort_metric_snippet is None
                     and special_leaderboard_snippet is None
@@ -512,6 +521,7 @@ class BaseballResearchEngine:
             and pitching_staff_comparison_snippet is None
             and team_history_snippet is None
             and team_split_history_snippet is None
+            and retrosheet_streak_snippet is None
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
             and season_metric_snippet is None
@@ -552,6 +562,7 @@ class BaseballResearchEngine:
             and pitching_staff_comparison_snippet is None
             and team_history_snippet is None
             and team_split_history_snippet is None
+            and retrosheet_streak_snippet is None
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
             and season_metric_snippet is None

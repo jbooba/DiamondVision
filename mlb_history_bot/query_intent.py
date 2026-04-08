@@ -20,6 +20,7 @@ HIGH_HINTS = {
     "most",
     "biggest",
     "largest",
+    "longest",
 }
 LOW_HINTS = {
     "lowest",
@@ -27,6 +28,7 @@ LOW_HINTS = {
     "bottom",
     "fewest",
     "smallest",
+    "shortest",
 }
 NEUTRAL_RANK_HINTS = {
     "leader",

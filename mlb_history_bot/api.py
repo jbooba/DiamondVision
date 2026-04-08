@@ -636,6 +636,23 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 rows,
             )
 
+    if analysis_type == "player_streak_leaderboard":
+        rows = payload.get("rows")
+        streak_label = str(payload.get("streak_label") or "Streak")
+        if isinstance(rows, list):
+            return build_table_display(
+                [
+                    {"key": "rank", "label": "#", "align": "right"},
+                    {"key": "player_name", "label": "Player", "align": "left"},
+                    {"key": "streak_length", "label": streak_label, "align": "right"},
+                    {"key": "start_date", "label": "Start", "align": "left"},
+                    {"key": "end_date", "label": "End", "align": "left"},
+                    {"key": "first_season", "label": "From", "align": "right"},
+                    {"key": "last_season", "label": "To", "align": "right"},
+                ],
+                rows,
+            )
+
     if analysis_type in {"manager_era_offense", "manager_era_defense"}:
         rows = payload.get("rows")
         if isinstance(rows, list):

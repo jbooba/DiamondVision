@@ -425,6 +425,20 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (player_id, opponent, context_key)
         );
+
+        CREATE TABLE IF NOT EXISTS retrosheet_player_streak_records (
+            player_id TEXT NOT NULL,
+            streak_key TEXT NOT NULL,
+            streak_length INTEGER NOT NULL DEFAULT 0,
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            start_gid TEXT NOT NULL DEFAULT '',
+            end_gid TEXT NOT NULL DEFAULT '',
+            first_season INTEGER NOT NULL DEFAULT 0,
+            last_season INTEGER NOT NULL DEFAULT 0,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (player_id, streak_key)
+        );
         """
     )
     _ensure_table_columns(
@@ -520,6 +534,9 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_player_opponent_contexts_lookup
         ON retrosheet_player_opponent_contexts (context_key, opponent, plate_appearances DESC, player_id);
+
+        CREATE INDEX IF NOT EXISTS idx_retrosheet_player_streak_records_lookup
+        ON retrosheet_player_streak_records (streak_key, streak_length DESC, player_id);
         """
     )
     connection.commit()
@@ -1445,6 +1462,12 @@ def clear_retrosheet_player_opponent_contexts(connection: sqlite3.Connection) ->
     connection.commit()
 
 
+def clear_retrosheet_player_streak_records(connection: sqlite3.Connection) -> None:
+    initialize_database(connection)
+    connection.execute("DELETE FROM retrosheet_player_streak_records")
+    connection.commit()
+
+
 def upsert_retrosheet_team_split_games(
     connection: sqlite3.Connection,
     rows: Iterable[dict[str, Any]],
@@ -1718,6 +1741,57 @@ def upsert_retrosheet_player_opponent_contexts(
             sacrifice_flies = excluded.sacrifice_flies,
             strikeouts = excluded.strikeouts,
             runs_batted_in = excluded.runs_batted_in,
+            first_season = excluded.first_season,
+            last_season = excluded.last_season,
+            imported_at = CURRENT_TIMESTAMP
+        """,
+        normalized_rows,
+    )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def upsert_retrosheet_player_streak_records(
+    connection: sqlite3.Connection,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            str(row.get("player_id") or ""),
+            str(row.get("streak_key") or ""),
+            _coerce_int(row.get("streak_length")),
+            str(row.get("start_date") or ""),
+            str(row.get("end_date") or ""),
+            str(row.get("start_gid") or ""),
+            str(row.get("end_gid") or ""),
+            _coerce_int(row.get("first_season")),
+            _coerce_int(row.get("last_season")),
+        )
+        for row in rows
+        if row.get("player_id") and row.get("streak_key") and _coerce_int(row.get("streak_length")) > 0
+    ]
+    if not normalized_rows:
+        return 0
+    connection.executemany(
+        """
+        INSERT INTO retrosheet_player_streak_records (
+            player_id,
+            streak_key,
+            streak_length,
+            start_date,
+            end_date,
+            start_gid,
+            end_gid,
+            first_season,
+            last_season
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(player_id, streak_key) DO UPDATE SET
+            streak_length = excluded.streak_length,
+            start_date = excluded.start_date,
+            end_date = excluded.end_date,
+            start_gid = excluded.start_gid,
+            end_gid = excluded.end_gid,
             first_season = excluded.first_season,
             last_season = excluded.last_season,
             imported_at = CURRENT_TIMESTAMP

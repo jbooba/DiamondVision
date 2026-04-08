@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from mlb_history_bot.config import Settings
+from mlb_history_bot.retrosheet_streaks import RetrosheetStreakResearcher, sync_retrosheet_player_streaks
+from mlb_history_bot.storage import get_connection, initialize_database, table_exists
+
+
+def build_test_settings(tmp_path: Path) -> Settings:
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    raw_dir.mkdir(parents=True)
+    processed_dir.mkdir(parents=True)
+    return Settings(
+        project_root=Path(__file__).resolve().parents[1],
+        raw_data_dir=raw_dir,
+        processed_data_dir=processed_dir,
+        database_path=processed_dir / "mlb_history.sqlite3",
+        sabr_docs_dir=raw_dir / "sabr",
+        openai_model="gpt-5.4",
+        openai_reasoning_effort="medium",
+        live_season=None,
+        user_agent="test-agent",
+        fielding_bible_api_base="https://example.com",
+        fielding_bible_start_season=2003,
+    )
+
+
+def seed_batting_and_people(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT PRIMARY KEY,
+            namefirst TEXT,
+            namelast TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_batting (
+            id TEXT,
+            gid TEXT,
+            date TEXT,
+            gametype TEXT,
+            b_pa TEXT,
+            b_ab TEXT,
+            b_h TEXT,
+            b_hr TEXT,
+            b_w TEXT,
+            b_hbp TEXT,
+            b_k TEXT
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO lahman_people(playerid, namefirst, namelast) VALUES (?, ?, ?)",
+        [
+            ("seweljo01", "Joe", "Sewell"),
+            ("willite01", "Ted", "Williams"),
+            ("dimagjo01", "Joe", "DiMaggio"),
+            ("stairsm01", "Matt", "Stairs"),
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO retrosheet_batting(id, gid, date, gametype, b_pa, b_ab, b_h, b_hr, b_w, b_hbp, b_k)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("dimagjo01", "g1", "19410515", "regular", "4", "4", "1", "0", "0", "0", "0"),
+            ("dimagjo01", "g2", "19410516", "regular", "4", "4", "1", "0", "0", "0", "0"),
+            ("dimagjo01", "g3", "19410517", "regular", "4", "4", "1", "0", "0", "0", "1"),
+            ("stairsm01", "g4", "20010901", "regular", "4", "4", "0", "1", "0", "0", "1"),
+            ("stairsm01", "g5", "20010902", "regular", "4", "4", "0", "1", "0", "0", "0"),
+            ("stairsm01", "g6", "20010903", "regular", "4", "4", "0", "0", "0", "0", "0"),
+        ],
+    )
+    connection.commit()
+
+
+def write_retrosheet_plays(retrosheet_dir: Path) -> None:
+    retrosheet_dir.mkdir(parents=True, exist_ok=True)
+    header = "gid,batter,pa,ab,k,date,gametype"
+    rows = [
+        "g1,seweljo01,1,1,0,19220601,regular",
+        "g1,seweljo01,1,1,0,19220601,regular",
+        "g1,seweljo01,1,1,0,19220601,regular",
+        "g2,seweljo01,1,1,1,19220602,regular",
+        "g3,willite01,1,1,0,19410701,regular",
+        "g3,willite01,1,1,0,19410701,regular",
+        "g3,willite01,1,0,0,19410701,regular",
+        "g4,willite01,1,1,1,19410702,regular",
+    ]
+    (retrosheet_dir / "plays.csv").write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+
+
+def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Path) -> None:
+    settings = build_test_settings(tmp_path)
+    connection = get_connection(settings.database_path)
+    initialize_database(connection)
+    seed_batting_and_people(connection)
+    connection.close()
+    write_retrosheet_plays(settings.raw_data_dir / "retrosheet")
+
+    messages = sync_retrosheet_player_streaks(
+        settings,
+        retrosheet_dir=settings.raw_data_dir / "retrosheet",
+        chunk_size=4,
+    )
+    assert any("streak warehouse" in message.lower() for message in messages)
+
+    connection = get_connection(settings.database_path)
+    try:
+        assert table_exists(connection, "retrosheet_player_streak_records")
+        researcher = RetrosheetStreakResearcher(settings)
+        ab_snippet = researcher.build_snippet(connection, "what is the longest number of at bats without a strikeout")
+        assert ab_snippet is not None
+        assert ab_snippet.payload["analysis_type"] == "player_streak_leaderboard"
+        assert ab_snippet.payload["rows"][0]["player_name"] == "Joe Sewell"
+        assert ab_snippet.payload["rows"][0]["streak_length"] == 3
+
+        hit_snippet = researcher.build_snippet(connection, "who has the longest hit streak")
+        assert hit_snippet is not None
+        assert hit_snippet.payload["rows"][0]["player_name"] == "Joe DiMaggio"
+        assert hit_snippet.payload["rows"][0]["streak_length"] == 3
+    finally:
+        connection.close()
