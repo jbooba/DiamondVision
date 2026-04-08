@@ -60,6 +60,7 @@ The project currently supports:
 - Optional `pybaseball` helpers for Statcast, team logs, and Lahman metadata fallback surfaces
 - CLI plus a retro-styled FastAPI web app ("DiamondVision 64")
 - A query-family planning matrix in [`docs/query_coverage_matrix.md`](docs/query_coverage_matrix.md) for systematic expansion across routine, comparative, contextual, Statcast, salary, historical, and replay-driven prompts
+- An implementation roadmap in [`docs/implementation_roadmap.md`](docs/implementation_roadmap.md) that prioritizes the shared relationship grammar, cohort/timeline tables, situation engine, broader Statcast warehouses, provider snapshots, and anomaly scoring
 
 ## Why This Approach
 

@@ -541,6 +541,54 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 rows,
             )
 
+    if analysis_type == "team_roster_leaderboard":
+        rows = payload.get("rows")
+        metric_label = str(payload.get("metric") or "Metric")
+        role = str(payload.get("role") or "")
+        if isinstance(rows, list):
+            columns = [
+                {"key": "rank", "label": "#", "align": "right"},
+                {"key": "player_name", "label": "Player", "align": "left"},
+                {"key": "metric_value", "label": metric_label, "align": "right"},
+                {"key": "games", "label": "G", "align": "right"},
+            ]
+            if role in {"hitter", "player"}:
+                columns.extend(
+                    [
+                        {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "avg", "label": "AVG", "align": "right"},
+                        {"key": "obp", "label": "OBP", "align": "right"},
+                        {"key": "slg", "label": "SLG", "align": "right"},
+                        {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                    ]
+                )
+            elif role in {"pitcher", "starter", "reliever"}:
+                columns.extend(
+                    [
+                        {"key": "innings", "label": "IP", "align": "right"},
+                        {"key": "games_started", "label": "GS", "align": "right"},
+                        {"key": "era", "label": "ERA", "align": "right"},
+                        {"key": "whip", "label": "WHIP", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                        {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "saves", "label": "SV", "align": "right"},
+                        {"key": "holds", "label": "HLD", "align": "right"},
+                    ]
+                )
+            else:
+                columns.extend(
+                    [
+                        {"key": "position", "label": "Pos", "align": "left"},
+                        {"key": "fielding_pct", "label": "Fld%", "align": "right"},
+                        {"key": "errors", "label": "E", "align": "right"},
+                        {"key": "assists", "label": "A", "align": "right"},
+                        {"key": "putouts", "label": "PO", "align": "right"},
+                    ]
+                )
+            return build_table_display(columns, rows)
+
     if analysis_type == "player_start_comparison":
         rows = payload.get("rows")
         metric_label = str(payload.get("metric") or "Metric")

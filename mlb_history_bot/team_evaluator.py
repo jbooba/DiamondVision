@@ -9,6 +9,7 @@ from .config import Settings
 from .live import LiveStatsClient
 from .models import EvidenceSnippet
 from .query_utils import question_mentions_explicit_year
+from .relationship_ontology import is_current_team_status_question
 from .storage import table_exists
 
 
@@ -230,7 +231,10 @@ class TeamEvaluator:
         if ("compare" in lowered or " versus " in lowered or " vs " in lowered) and question_mentions_explicit_year(question):
             return None
         if not (
-            any(hint in lowered for hint in NEGATIVE_HINTS | POSITIVE_HINTS | ANALYSIS_HINTS)
+            (
+                any(hint in lowered for hint in NEGATIVE_HINTS | POSITIVE_HINTS | ANALYSIS_HINTS)
+                or is_current_team_status_question(question)
+            )
             and (any(hint in lowered for hint in CURRENT_HINTS) or not question_mentions_explicit_year(question))
         ):
             return None
