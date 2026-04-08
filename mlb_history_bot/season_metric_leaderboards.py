@@ -40,12 +40,113 @@ HISTORY_HINTS = {
     "in mlb history",
     "in baseball history",
 }
+CAREER_HINTS = {
+    "career",
+    "careers",
+    "career-spanning",
+    "career spanning",
+    "career wise",
+    "career-wise",
+}
+SINGLE_SEASON_HINTS = {
+    "single season",
+    "single-season",
+    "season record",
+    "best season",
+    "worst season",
+    "in a season",
+}
 STATCAST_ERA_HINTS = {"statcast era", "since statcast", "in the statcast era"}
 TEAM_SCOPE_HINTS = ("which team", "what team", "teams had", "team had", "team has")
 QUALIFIER_CLAUSE_PATTERN = re.compile(
     r"\b(?:with|and)?\s*(?:a\s+)?(?:minimum|min|at\s+least)\s+(?:of\s+)?[a-z0-9-]+(?:\s+[a-z0-9-]+){0,3}\s+"
     r"(?:starts?|gs|games?|plate\s+appearances|pa|at\s+bats|ab|innings|ip|home\s+runs?|hr|hits?|walks?|strikeouts?|outs?)\b",
     re.IGNORECASE,
+)
+METRIC_NORMALIZATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\bwalk(?:ed|s)?(?:\s+the\s+(?:most|least|fewest|highest|lowest))?\s+batters?\s+per\s+game\b",
+            re.IGNORECASE,
+        ),
+        "walks per game",
+    ),
+    (
+        re.compile(
+            r"\bbatters?\s+walk(?:ed|s)?\s+per\s+game\b",
+            re.IGNORECASE,
+        ),
+        "walks per game",
+    ),
+    (
+        re.compile(
+            r"\bstr(?:u|o)ck?\s+out(?:\s+the\s+(?:most|least|fewest|highest|lowest))?\s+batters?\s+per\s+game\b",
+            re.IGNORECASE,
+        ),
+        "strikeouts per game",
+    ),
+    (
+        re.compile(
+            r"\bhits?\s+allowed\s+per\s+game\b",
+            re.IGNORECASE,
+        ),
+        "hits allowed per game",
+    ),
+    (
+        re.compile(
+            r"\bhome\s+runs?\s+allowed\s+per\s+game\b",
+            re.IGNORECASE,
+        ),
+        "home runs allowed per game",
+    ),
+)
+TEAM_ROLE_HINT_WORDS = (" which team ", " what team ", " teams ", " team ")
+PITCHING_ROLE_HINT_WORDS = (
+    " pitcher ",
+    " pitchers ",
+    " starter ",
+    " starters ",
+    " reliever ",
+    " relievers ",
+    " bullpen ",
+    " rotation ",
+    " on the mound ",
+    " games started ",
+    " starts ",
+    " era ",
+    " fip ",
+    " whip ",
+    " allowed ",
+)
+FIELDING_ROLE_HINT_WORDS = (
+    " defender ",
+    " defenders ",
+    " fielding ",
+    " fielder ",
+    " fielders ",
+    " defensive ",
+    " defense ",
+    " glove ",
+    " errors ",
+    " assists ",
+    " putouts ",
+)
+HITTING_ROLE_HINT_WORDS = (
+    " hitter ",
+    " hitters ",
+    " batter ",
+    " batters ",
+    " batting ",
+    " offense ",
+    " offensive ",
+    " lineup ",
+    " hits ",
+    " home runs ",
+    " rbi ",
+    " runs batted in ",
+    " obp ",
+    " slg ",
+    " ops ",
 )
 
 
@@ -100,11 +201,17 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("hits", "Hits", ("hits", "base hits", "base hit"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("home_runs", "HR", ("home runs", "home run", "hr", "homers", "homeruns"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("runs", "Runs", ("runs scored", "runs"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("runs_per_game", "R/G", ("runs per game", "r/g", "runs/game"), "historical", "hitter", "player", True, ".2f", "games", 10),
     SeasonMetricSpec("rbi", "RBI", ("rbi", "runs batted in"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("rbi_per_game", "RBI/G", ("rbi per game", "rbi/game", "runs batted in per game"), "historical", "hitter", "player", True, ".2f", "games", 10),
     SeasonMetricSpec("walks", "BB", ("walks", "walk"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("walks_per_game", "BB/G", ("walks per game", "bb/g", "bb per game"), "historical", "hitter", "player", True, ".2f", "games", 10),
     SeasonMetricSpec("strikeouts", "SO", ("strikeouts", "strikeout"), "historical", "hitter", "player", False, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("strikeouts_per_game", "SO/G", ("strikeouts per game", "so/g", "so per game"), "historical", "hitter", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("steals", "SB", ("stolen bases", "stolen base", "steals", "sb"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("hit_by_pitch", "HBP", ("hit by pitch", "hbp"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("hits_per_game", "H/G", ("hits per game", "h/g", "base hits per game"), "historical", "hitter", "player", True, ".2f", "games", 10),
+    SeasonMetricSpec("home_runs_per_game", "HR/G", ("home runs per game", "hr/g", "homers per game"), "historical", "hitter", "player", True, ".2f", "games", 10),
     SeasonMetricSpec("era", "ERA", ("era", "earned run average"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("fip", "FIP", ("fip", "fielding independent pitching"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("whip", "WHIP", ("whip",), "historical", "pitcher", "player", False, ".3f", "ipouts", 30),
@@ -115,15 +222,20 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("saves", "Saves", ("saves",), "historical", "pitcher", "player", True, ".0f", "games", 1),
     SeasonMetricSpec("innings", "IP", ("innings pitched", "innings"), "historical", "pitcher", "player", True, ".1f", "ipouts", 30),
     SeasonMetricSpec("strikeouts", "SO", ("strikeouts", "strikeout"), "historical", "pitcher", "player", True, ".0f", "ipouts", 30),
+    SeasonMetricSpec("strikeouts_per_game", "SO/G", ("strikeouts per game", "so/g", "strikeouts/game"), "historical", "pitcher", "player", True, ".2f", "games", 10),
     SeasonMetricSpec("walks", "BB", ("walks", "walks allowed", "bb"), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
+    SeasonMetricSpec("walks_per_game", "BB/G", ("walks per game", "bb/g", "batters walked per game", "walked batters per game"), "historical", "pitcher", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("earned_runs", "ER", ("earned runs", "earned run", "er"), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
+    SeasonMetricSpec("earned_runs_per_game", "ER/G", ("earned runs per game", "er/g"), "historical", "pitcher", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("strikeouts_per_9", "K/9", ("k/9", "strikeouts per 9", "strikeouts per nine"), "historical", "pitcher", "player", True, ".2f", "ipouts", 30),
     SeasonMetricSpec("walks_per_9", "BB/9", ("bb/9", "walks per 9", "walks per nine"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("hits_per_9", "H/9", ("h/9", "hits per 9", "hits per nine"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("home_runs_per_9", "HR/9", ("hr/9", "home runs per 9", "home runs per nine"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("strikeout_to_walk", "K/BB", ("k/bb", "strikeout to walk ratio", "strikeouts to walks"), "historical", "pitcher", "player", True, ".2f", "ipouts", 30),
     SeasonMetricSpec("hits_allowed", "Hits Allowed", ("hits allowed",), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
+    SeasonMetricSpec("hits_allowed_per_game", "H/G Allowed", ("hits allowed per game", "h/g allowed"), "historical", "pitcher", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("home_runs_allowed", "HR Allowed", ("home runs allowed", "home run allowed"), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
+    SeasonMetricSpec("home_runs_allowed_per_game", "HR/G Allowed", ("home runs allowed per game", "hr/g allowed"), "historical", "pitcher", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("games", "Games", ("games", "games played"), "historical", "fielder", "player", True, ".0f", "games", 10),
     SeasonMetricSpec("fielding_pct", "Fld%", ("fielding percentage", "fielding pct", "fielding"), "historical", "fielder", "player", True, ".3f", "games", 10),
     SeasonMetricSpec("errors", "Errors", ("errors",), "historical", "fielder", "player", False, ".0f", "games", 10),
@@ -134,16 +246,21 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("losses", "Losses", ("losses",), "historical", "team", "team", False, ".0f", "games", 10),
     SeasonMetricSpec("win_pct", "Win%", ("winning percentage", "win percentage", "win pct", "win%"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("runs", "Runs", ("runs scored", "runs"), "historical", "team", "team", True, ".0f", "games", 10),
+    SeasonMetricSpec("runs_per_game", "R/G", ("runs per game", "r/g", "runs/game"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("runs_allowed", "Runs Allowed", ("runs allowed", "ra"), "historical", "team", "team", False, ".0f", "games", 10),
+    SeasonMetricSpec("runs_allowed_per_game", "RA/G", ("runs allowed per game", "ra/g"), "historical", "team", "team", False, ".2f", "games", 10),
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("walks", "BB", ("walks", "walk"), "historical", "team", "team", True, ".0f", "games", 10),
+    SeasonMetricSpec("walks_per_game", "BB/G", ("walks per game", "bb/g", "bb per game"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("avg", "AVG", ("batting average", "avg", "ba"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("obp", "OBP", ("obp", "on-base percentage", "on base percentage"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("slg", "SLG", ("slg", "slugging percentage", "slugging"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("ops", "OPS", ("ops", "on-base plus slugging", "on base plus slugging"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("home_runs", "HR", ("home runs", "home run", "hr", "homers", "homeruns"), "historical", "team", "team", True, ".0f", "games", 10),
+    SeasonMetricSpec("home_runs_per_game", "HR/G", ("home runs per game", "hr/g", "homers per game"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("hits", "Hits", ("hits", "base hits", "base hit"), "historical", "team", "team", True, ".0f", "games", 10),
+    SeasonMetricSpec("hits_per_game", "H/G", ("hits per game", "h/g", "base hits per game"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("fielding_pct", "Fld%", ("fielding percentage", "fielding pct", "fielding"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("plate_appearances", "PA", ("plate appearances", "pa"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 10),
     SeasonMetricSpec("at_bats", "AB", ("at bats", "ab"), "statcast", "hitter", "player", True, ".0f", "at_bats", 10),
@@ -164,10 +281,15 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("home_runs", "HR", ("home runs", "home run", "hr", "homers", "homeruns"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("home_runs_per_game", "HR/G", ("home runs per game", "hr/g", "homers per game"), "statcast", "hitter", "player", True, ".2f", "games", 5),
     SeasonMetricSpec("hits", "Hits", ("hits", "base hits", "base hit"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("hits_per_game", "H/G", ("hits per game", "h/g", "base hits per game"), "statcast", "hitter", "player", True, ".2f", "games", 5),
     SeasonMetricSpec("walks", "BB", ("walks", "walk"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("walks_per_game", "BB/G", ("walks per game", "bb/g", "bb per game"), "statcast", "hitter", "player", True, ".2f", "games", 5),
     SeasonMetricSpec("strikeouts", "SO", ("strikeouts", "strikeout"), "statcast", "hitter", "player", False, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("strikeouts_per_game", "SO/G", ("strikeouts per game", "so/g", "so per game"), "statcast", "hitter", "player", False, ".2f", "games", 5),
     SeasonMetricSpec("rbi", "RBI", ("rbi", "runs batted in"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("rbi_per_game", "RBI/G", ("rbi per game", "rbi/game", "runs batted in per game"), "statcast", "hitter", "player", True, ".2f", "games", 5),
     SeasonMetricSpec("plate_appearances", "PA", ("plate appearances", "pa"), "statcast", "team", "team", True, ".0f", "plate_appearances", 50),
     SeasonMetricSpec("xba", "xBA", ("xba", "expected batting average"), "statcast", "team", "team", True, ".3f", "at_bats", 100),
     SeasonMetricSpec("xwoba", "xwOBA", ("xwoba", "expected woba"), "statcast", "team", "team", True, ".3f", "xwoba_denom", 100),
@@ -176,7 +298,9 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("barrel_rate", "Barrel Rate", ("barrel rate",), "statcast", "team", "team", True, ".3f", "batted_ball_events", 50),
     SeasonMetricSpec("avg_exit_velocity", "Avg EV", ("average exit velocity", "avg exit velocity", "ev", "exit velocity"), "statcast", "team", "team", True, ".1f", "launch_speed_count", 30),
     SeasonMetricSpec("hits", "Hits", ("hits", "base hits", "base hit"), "statcast", "team", "team", True, ".0f", "plate_appearances", 30),
+    SeasonMetricSpec("hits_per_game", "H/G", ("hits per game", "h/g", "base hits per game"), "statcast", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("strikeouts", "Strikeouts", ("strikeouts", "strikeout"), "statcast", "team", "team", False, ".0f", "plate_appearances", 30),
+    SeasonMetricSpec("strikeouts_per_game", "SO/G", ("strikeouts per game", "so/g", "so per game"), "statcast", "team", "team", False, ".2f", "games", 10),
 )
 
 
@@ -233,14 +357,14 @@ class SeasonMetricLeaderboardResearcher:
                 "role": query.role,
                 "source_family": query.metric.source_family,
                 "team_filter": query.team_filter_name,
-                "rows": rows[:12],
+                "rows": rows[:25],
             },
         )
 
 
 def parse_season_metric_query(connection, settings: Settings, catalog: MetricCatalog, question: str) -> SeasonMetricQuery | None:
     lowered = f" {question.lower()} "
-    metric_search_text = strip_qualifier_clauses(lowered)
+    metric_search_text = normalize_metric_search_text(strip_qualifier_clauses(lowered))
     metric = find_season_metric(metric_search_text)
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
@@ -257,7 +381,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         return None
     if not looks_like_leaderboard_question(lowered):
         return None
-    ranking_intent = detect_ranking_intent(metric_search_text, higher_is_better=metric.higher_is_better, fallback_label="leader")
+    ranking_intent = detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, fallback_label="leader")
     if ranking_intent is None:
         return None
     current_season = settings.live_season or date.today().year
@@ -324,10 +448,11 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
                     continue
                 score = len(alias_lower)
             else:
-                token = f" {alias_lower} "
-                if token not in lowered_question:
+                pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+                if re.search(pattern, lowered_question) is None:
                     continue
                 score = len(alias_lower)
+            score += metric_match_bonus(metric, lowered_question)
             if best_match is None or score > best_match[0]:
                 best_match = (score, metric)
     return best_match[1] if best_match else None
@@ -335,6 +460,26 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
 
 def strip_qualifier_clauses(lowered_question: str) -> str:
     return QUALIFIER_CLAUSE_PATTERN.sub(" ", lowered_question)
+
+
+def normalize_metric_search_text(lowered_question: str) -> str:
+    normalized = lowered_question
+    for pattern, replacement in METRIC_NORMALIZATION_PATTERNS:
+        normalized = pattern.sub(f" {replacement} ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def metric_match_bonus(metric: SeasonMetricSpec, lowered_question: str) -> int:
+    score = 0
+    if metric.entity_scope == "team" and any(token in lowered_question for token in TEAM_ROLE_HINT_WORDS):
+        score += 40
+    if metric.role == "pitcher" and any(token in lowered_question for token in PITCHING_ROLE_HINT_WORDS):
+        score += 30
+    if metric.role == "fielder" and any(token in lowered_question for token in FIELDING_ROLE_HINT_WORDS):
+        score += 30
+    if metric.role == "hitter" and any(token in lowered_question for token in HITTING_ROLE_HINT_WORDS):
+        score += 20
+    return score
 
 
 def resolve_season_scope(question: str, current_season: int, source_family: str) -> tuple[int | None, int | None, str, bool]:
@@ -353,11 +498,19 @@ def resolve_season_scope(question: str, current_season: int, source_family: str)
         return current_season, current_season, str(current_season), False
     if any(token in lowered for token in STATCAST_ERA_HINTS) and source_family == "statcast":
         return 2015, current_season, "Statcast era", True
-    if any(token in lowered for token in HISTORY_HINTS):
+    history_requested = any(token in lowered for token in HISTORY_HINTS)
+    career_requested = any(token in lowered for token in CAREER_HINTS)
+    single_season_requested = any(token in lowered for token in SINGLE_SEASON_HINTS)
+    if history_requested or career_requested:
         start = 2015 if source_family == "statcast" else 1871
-        return start, current_season, "Statcast era" if source_family == "statcast" else "MLB history", False
+        label = "Statcast era" if source_family == "statcast" else "MLB history"
+        return start, current_season, label, not single_season_requested
     if source_family == "statcast" and mentions_current_scope(lowered):
         return current_season, current_season, str(current_season), False
+    if source_family != "provider" and not mentions_current_scope(lowered):
+        start = 2015 if source_family == "statcast" else 1871
+        label = "Statcast era" if source_family == "statcast" else "MLB history"
+        return start, current_season, label, True
     return None, None, "", False
 
 
@@ -660,7 +813,14 @@ def fetch_historical_pitcher_rows(connection, query: SeasonMetricQuery) -> list[
     candidates: list[dict[str, Any]] = []
     for row in rows:
         ipouts = safe_int(row["ipouts"]) or 0
-        if not passes_sample_threshold(query.metric, {"ipouts": ipouts, "games": safe_int(row["games"]) or 0}):
+        if not passes_sample_threshold(
+            query.metric,
+            {
+                "ipouts": ipouts,
+                "games": safe_int(row["games"]) or 0,
+                "games_started": safe_int(row["games_started"]) or 0,
+            },
+        ):
             continue
         games_started = safe_int(row["games_started"]) or 0
         if query.minimum_starts is not None and games_started < query.minimum_starts:
@@ -839,16 +999,21 @@ def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dic
             "losses": float(losses),
             "win_pct": (wins / (wins + losses)) if (wins + losses) else None,
             "runs": safe_float(row["r"]),
+            "runs_per_game": ((safe_int(row["r"]) or 0) / games) if games else None,
             "runs_allowed": safe_float(row["ra"]),
+            "runs_allowed_per_game": ((safe_int(row["ra"]) or 0) / games) if games else None,
             "doubles": safe_float(row["c_2b"]),
             "triples": safe_float(row["c_3b"]),
             "walks": safe_float(row["bb"]),
+            "walks_per_game": ((safe_int(row["bb"]) or 0) / games) if games else None,
             "avg": avg,
             "obp": obp,
             "slg": slg,
             "ops": ops,
             "home_runs": float(home_runs),
+            "home_runs_per_game": (home_runs / games) if games else None,
             "hits": float(hits),
+            "hits_per_game": (hits / games) if games else None,
             "fielding_pct": safe_float(row["fp"]),
         }.get(query.metric.key)
         if metric_value is None:
@@ -975,6 +1140,7 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
                 "sample_size": float(metrics.get(query.metric.sample_basis or "plate_appearances") or 0),
+                "games": safe_int(row["games"]) or 0,
                 "plate_appearances": safe_int(row["plate_appearances"]) or 0,
                 "at_bats": safe_int(row["at_bats"]) or 0,
                 "hits": safe_int(row["hits"]) or 0,
@@ -998,6 +1164,11 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
                 "max_exit_velocity": metrics.get("max_exit_velocity"),
                 "avg_bat_speed": metrics.get("avg_bat_speed"),
                 "max_bat_speed": metrics.get("max_bat_speed"),
+                "hits_per_game": metrics.get("hits_per_game"),
+                "home_runs_per_game": metrics.get("home_runs_per_game"),
+                "walks_per_game": metrics.get("walks_per_game"),
+                "strikeouts_per_game": metrics.get("strikeouts_per_game"),
+                "rbi_per_game": metrics.get("rbi_per_game"),
             }
         )
     return rank_rows(candidates, query)
@@ -1024,6 +1195,7 @@ def fetch_statcast_batter_summary_rows(connection, query: SeasonMetricQuery):
             batter_id,
             MIN(batter_name) AS player_name,
             CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
+            COUNT(DISTINCT game_pk) AS games,
             SUM(plate_appearances) AS plate_appearances,
             SUM(at_bats) AS at_bats,
             SUM(hits) AS hits,
@@ -1053,6 +1225,7 @@ def fetch_statcast_batter_summary_rows(connection, query: SeasonMetricQuery):
         """,
         tuple(parameters),
     ).fetchall()
+    return rows
 
 
 def fetch_statcast_batter_event_rows(connection, query: SeasonMetricQuery):
@@ -1076,6 +1249,7 @@ def fetch_statcast_batter_event_rows(connection, query: SeasonMetricQuery):
             batter_id,
             MIN(batter_name) AS player_name,
             CASE WHEN COUNT(DISTINCT upper(batting_team)) = 1 THEN MIN(upper(batting_team)) ELSE 'MULTI' END AS team,
+            COUNT(DISTINCT game_pk) AS games,
             COUNT(*) AS plate_appearances,
             SUM(is_ab) AS at_bats,
             SUM(is_hit) AS hits,
@@ -1182,6 +1356,7 @@ def statcast_batter_metric_values(row) -> dict[str, float | None]:
     at_bats = safe_int(row["at_bats"]) or 0
     launch_speed_count = safe_int(row["launch_speed_count"]) or 0
     plate_appearances = safe_int(row["plate_appearances"]) or 0
+    games = safe_int(row["games"]) or 0
     batted_ball_events = safe_int(row["batted_ball_events"]) or 0
     xwoba_denom = safe_float(row["xwoba_denom"]) or 0.0
     launch_speed_sum = safe_float(row["launch_speed_sum"]) or 0.0
@@ -1197,6 +1372,7 @@ def statcast_batter_metric_values(row) -> dict[str, float | None]:
     return {
         "plate_appearances": float(plate_appearances),
         "at_bats": float(at_bats),
+        "games": float(games),
         "batted_ball_events": float(batted_ball_events),
         "xwoba_denom": float(xwoba_denom),
         "launch_speed_count": float(launch_speed_count),
@@ -1217,10 +1393,15 @@ def statcast_batter_metric_values(row) -> dict[str, float | None]:
         "doubles": float(doubles),
         "triples": float(triples),
         "home_runs": safe_float(row["home_runs"]),
+        "home_runs_per_game": (home_runs / games) if games else None,
         "hits": safe_float(row["hits"]),
+        "hits_per_game": (hits / games) if games else None,
         "walks": safe_float(row["walks"]),
+        "walks_per_game": (walks / games) if games else None,
         "strikeouts": safe_float(row["strikeouts"]),
+        "strikeouts_per_game": ((safe_int(row["strikeouts"]) or 0) / games) if games else None,
         "rbi": safe_float(row["runs_batted_in"]),
+        "rbi_per_game": ((safe_int(row["runs_batted_in"]) or 0) / games) if games else None,
     }
 
 
@@ -1245,7 +1426,9 @@ def statcast_team_metric_values(row) -> dict[str, float | None]:
         "barrel_rate": ((safe_int(row["barrel_bbe"]) or 0) / batted_ball_events) if batted_ball_events else None,
         "avg_exit_velocity": (launch_speed_sum / launch_speed_count) if launch_speed_count else None,
         "hits": safe_float(row["hits"]),
+        "hits_per_game": ((safe_int(row["hits"]) or 0) / (safe_int(row["games"]) or 0)) if (safe_int(row["games"]) or 0) else None,
         "strikeouts": safe_float(row["strikeouts"]),
+        "strikeouts_per_game": ((safe_int(row["strikeouts"]) or 0) / (safe_int(row["games"]) or 0)) if (safe_int(row["games"]) or 0) else None,
     }
 
 

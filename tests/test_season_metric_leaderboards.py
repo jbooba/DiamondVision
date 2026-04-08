@@ -276,6 +276,35 @@ def test_historical_pitcher_range_leaderboard_uses_requested_metric_not_starts()
     con.close()
 
 
+def test_historical_pitcher_all_time_bb9_leaderboard_aggregates_career() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "which pitcher with a minimum of 50 starts has the highest bb/9 of all time?",
+    )
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert snippet.payload["rows"][0]["scope_label"] == "2022-2026"
+    con.close()
+
+
+def test_historical_pitcher_walks_per_game_query_maps_to_career_leaderboard() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "which pitcher with at least 50 starts walked the most batters per game",
+    )
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["metric"] == "BB/G"
+    assert snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert snippet.payload["rows"][0]["scope_label"] == "2022-2026"
+    con.close()
+
+
 def test_initialize_database_migrates_existing_statcast_events_columns_before_indexes() -> None:
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
