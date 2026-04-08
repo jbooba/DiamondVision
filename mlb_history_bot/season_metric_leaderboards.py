@@ -58,6 +58,27 @@ SINGLE_SEASON_HINTS = {
 }
 STATCAST_ERA_HINTS = {"statcast era", "since statcast", "in the statcast era"}
 TEAM_SCOPE_HINTS = ("which team", "what team", "teams had", "team had", "team has")
+TEAM_HISTORY_AGGREGATE_HINTS = (
+    "franchise",
+    "franchises",
+    "all-time franchise",
+    "team history",
+    "franchise history",
+)
+WINNING_RECORD_HINTS = (
+    "with a winning record",
+    "with winning record",
+    "with a winning percentage above .500",
+    "above .500",
+    "over .500",
+)
+LOSING_RECORD_HINTS = (
+    "with a losing record",
+    "with losing record",
+    "with a winning percentage below .500",
+    "below .500",
+    "under .500",
+)
 QUALIFIER_CLAUSE_PATTERN = re.compile(
     r"\b(?:with|and)?\s*(?:a\s+)?(?:minimum|min|at\s+least)\s+(?:of\s+)?[a-z0-9-]+(?:\s+[a-z0-9-]+){0,3}\s+"
     r"(?:starts?|gs|games?|plate\s+appearances|pa|at\s+bats|ab|innings|ip|home\s+runs?|hr|hits?|walks?|strikeouts?|outs?)\b",
@@ -183,6 +204,7 @@ class SeasonMetricQuery:
     provider_group_preference: str | None
     minimum_starts: int | None
     aggregate_range: bool = False
+    team_record_filter: str | None = None
 
 
 SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
@@ -195,7 +217,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("avg", "AVG", ("avg", "ba", "batting average"), "historical", "hitter", "player", True, ".3f", "at_bats", 25),
     SeasonMetricSpec("total_bases", "TB", ("total bases", "tb"), "historical", "hitter", "player", True, ".0f", "at_bats", 5),
     SeasonMetricSpec("extra_base_hits", "XBH", ("extra-base hits", "extra base hits", "xbh"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
-    SeasonMetricSpec("singles", "Singles", ("singles", "single"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("singles", "Singles", ("singles",), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("hits", "Hits", ("hits", "base hits", "base hit"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
@@ -249,6 +271,8 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("runs_per_game", "R/G", ("runs per game", "r/g", "runs/game"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("runs_allowed", "Runs Allowed", ("runs allowed", "ra"), "historical", "team", "team", False, ".0f", "games", 10),
     SeasonMetricSpec("runs_allowed_per_game", "RA/G", ("runs allowed per game", "ra/g"), "historical", "team", "team", False, ".2f", "games", 10),
+    SeasonMetricSpec("run_differential", "Run Differential", ("run differential", "run diff", "run difference", "rd"), "historical", "team", "team", True, ".0f", "games", 10),
+    SeasonMetricSpec("run_differential_per_game", "Run Differential/G", ("run differential per game", "run diff per game", "rd/g"), "historical", "team", "team", True, ".2f", "games", 10),
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("walks", "BB", ("walks", "walk"), "historical", "team", "team", True, ".0f", "games", 10),
@@ -277,7 +301,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("max_exit_velocity", "maxEV", ("max exit velocity", "maximum exit velocity", "maxev"), "statcast", "hitter", "player", True, ".1f", "launch_speed_count", 1),
     SeasonMetricSpec("avg_bat_speed", "Avg Bat Speed", ("average bat speed", "avg bat speed", "bat speed"), "statcast", "hitter", "player", True, ".1f", "plate_appearances", 10),
     SeasonMetricSpec("max_bat_speed", "Max Bat Speed", ("max bat speed", "maximum bat speed"), "statcast", "hitter", "player", True, ".1f", "plate_appearances", 10),
-    SeasonMetricSpec("singles", "Singles", ("singles", "single"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
+    SeasonMetricSpec("singles", "Singles", ("singles",), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("home_runs", "HR", ("home runs", "home run", "hr", "homers", "homeruns"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 5),
@@ -385,6 +409,8 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
     if ranking_intent is None:
         return None
     current_season = settings.live_season or date.today().year
+    explicit_span = extract_season_span(question, current_season) is not None
+    explicit_season = extract_referenced_season(question, current_season) is not None
     start_season, end_season, scope_label, aggregate_range = resolve_season_scope(question, current_season, metric.source_family)
     if start_season is None or end_season is None:
         return None
@@ -414,10 +440,20 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         return None
     entity_scope = "team" if metric.entity_scope == "team" or (explicit_team_scope and metric_supports_team_scope(metric)) else "player"
     role = metric.role if entity_scope == "player" else "team"
+    if (
+        entity_scope == "team"
+        and metric.source_family == "historical"
+        and aggregate_range
+        and not explicit_span
+        and not explicit_season
+        and not any(token in lowered for token in TEAM_HISTORY_AGGREGATE_HINTS)
+    ):
+        aggregate_range = False
     team_filter_code = None
     team_filter_name = None
     if entity_scope == "player":
         team_filter_code, team_filter_name = resolve_question_team_filter(connection, settings, question, start_season, end_season)
+    team_record_filter = parse_team_record_filter(lowered) if entity_scope == "team" else None
     return SeasonMetricQuery(
         metric=metric,
         descriptor=ranking_intent.descriptor,
@@ -432,6 +468,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         provider_group_preference=provider_group_preference,
         minimum_starts=minimum_starts,
         aggregate_range=aggregate_range,
+        team_record_filter=team_record_filter,
     )
 
 
@@ -557,6 +594,7 @@ def build_statcast_provider_fallback_query(query: SeasonMetricQuery, catalog: Me
         team_filter_name=query.team_filter_name,
         provider_group_preference="batting",
         minimum_starts=None,
+        team_record_filter=query.team_record_filter,
     )
 
 
@@ -591,7 +629,32 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
         provider_group_preference=query.provider_group_preference,
         minimum_starts=query.minimum_starts,
         aggregate_range=query.aggregate_range,
+        team_record_filter=query.team_record_filter,
     )
+
+
+def parse_team_record_filter(lowered_question: str) -> str | None:
+    if any(hint in lowered_question for hint in WINNING_RECORD_HINTS):
+        return "winning"
+    if any(hint in lowered_question for hint in LOSING_RECORD_HINTS):
+        return "losing"
+    return None
+
+
+def team_record_filter_matches(filter_key: str | None, wins: int, losses: int) -> bool:
+    if filter_key == "winning":
+        return wins > losses
+    if filter_key == "losing":
+        return losses > wins
+    return True
+
+
+def describe_team_record_filter(filter_key: str | None) -> str:
+    if filter_key == "winning":
+        return " with a winning record"
+    if filter_key == "losing":
+        return " with a losing record"
+    return ""
 
 
 def normalize_metric_key(metric_name: str) -> str:
@@ -990,6 +1053,11 @@ def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dic
         obp_denom = at_bats + walks + hbp + sacrifice_flies
         wins = safe_int(row["w"]) or 0
         losses = safe_int(row["l"]) or 0
+        if not team_record_filter_matches(query.team_record_filter, wins, losses):
+            continue
+        runs = safe_int(row["r"]) or 0
+        runs_allowed = safe_int(row["ra"]) or 0
+        run_differential = runs - runs_allowed
         avg = (hits / at_bats) if at_bats else None
         obp = ((hits + walks + hbp) / obp_denom) if obp_denom else None
         slg = ((singles + (2 * doubles) + (3 * triples) + (4 * home_runs)) / at_bats) if at_bats else None
@@ -998,10 +1066,12 @@ def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dic
             "wins": float(wins),
             "losses": float(losses),
             "win_pct": (wins / (wins + losses)) if (wins + losses) else None,
-            "runs": safe_float(row["r"]),
-            "runs_per_game": ((safe_int(row["r"]) or 0) / games) if games else None,
-            "runs_allowed": safe_float(row["ra"]),
-            "runs_allowed_per_game": ((safe_int(row["ra"]) or 0) / games) if games else None,
+            "runs": float(runs),
+            "runs_per_game": (runs / games) if games else None,
+            "runs_allowed": float(runs_allowed),
+            "runs_allowed_per_game": (runs_allowed / games) if games else None,
+            "run_differential": float(run_differential),
+            "run_differential_per_game": (run_differential / games) if games else None,
             "doubles": safe_float(row["c_2b"]),
             "triples": safe_float(row["c_3b"]),
             "walks": safe_float(row["bb"]),
@@ -1033,8 +1103,9 @@ def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dic
                 "wins": wins,
                 "losses": losses,
                 "win_pct": (wins / (wins + losses)) if (wins + losses) else None,
-                "runs": safe_int(row["r"]) or 0,
-                "runs_allowed": safe_int(row["ra"]) or 0,
+                "runs": runs,
+                "runs_allowed": runs_allowed,
+                "run_differential": run_differential,
                 "doubles": doubles,
                 "triples": triples,
                 "walks": walks,
@@ -1515,11 +1586,12 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
     subject_label = leader.get("player_name") or leader.get("team_name") or "Unknown"
     value_text = f"{float(leader['metric_value']):{query.metric.formatter}}"
     filter_text = f" for {query.team_filter_name}" if query.team_filter_name else ""
+    record_filter_text = describe_team_record_filter(query.team_record_filter) if query.entity_scope == "team" else ""
     subject_phrase = "team" if query.entity_scope == "team" else query.role
     leader_scope = str(leader.get("scope_label") or leader.get("season") or "")
     scope_parenthetical = f" ({leader_scope})" if leader_scope and not query.aggregate_range else ""
     summary = (
-        f"For {query.scope_label}{filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
+        f"For {query.scope_label}{filter_text}{record_filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
         f"is {subject_label}{scope_parenthetical} at {value_text}."
     )
     trailing = rows[1:4]

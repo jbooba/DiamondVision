@@ -149,6 +149,7 @@ def build_test_connection() -> sqlite3.Connection:
         [
             ("2024", "BOS", "Boston Red Sox", "162", "81", "81", "751", "5500", "1450", "300", "25", "210", "550", "60", "45", "720", "4.10", ".985"),
             ("2024", "NYY", "New York Yankees", "162", "90", "72", "720", "5525", "1350", "250", "20", "180", "500", "40", "40", "650", "3.85", ".983"),
+            ("2023", "MIA", "Miami Marlins", "162", "84", "78", "666", "5450", "1360", "260", "18", "170", "480", "42", "38", "723", "4.22", ".984"),
         ],
     )
     con.executemany(
@@ -200,6 +201,19 @@ def test_historical_team_season_leaderboard_builds() -> None:
     snippet = researcher.build_snippet(con, "which team had the highest batting average in 2024?")
     assert snippet is not None
     assert snippet.payload["rows"][0]["team_name"] == "Boston Red Sox"
+    con.close()
+
+
+def test_historical_team_history_run_differential_with_record_filter_builds() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which team in MLB history had the worst run differential with a winning record")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["entity_scope"] == "team"
+    assert snippet.payload["rows"][0]["team_name"] == "Miami Marlins"
+    assert snippet.payload["rows"][0]["run_differential"] == -57
+    assert snippet.payload["rows"][0]["scope_label"] == "2023"
     con.close()
 
 

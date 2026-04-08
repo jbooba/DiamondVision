@@ -653,6 +653,23 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 rows,
             )
 
+    if analysis_type == "inning_record_leaderboard":
+        rows = payload.get("rows")
+        metric_label = str(payload.get("metric") or "Runs")
+        if isinstance(rows, list):
+            return build_table_display(
+                [
+                    {"key": "rank", "label": "#", "align": "right"},
+                    {"key": "season", "label": "Season", "align": "right"},
+                    {"key": "game_date", "label": "Date", "align": "left"},
+                    {"key": "team_name", "label": "Team", "align": "left"},
+                    {"key": "opponent_name", "label": "Opponent", "align": "left"},
+                    {"key": "inning", "label": "Inning", "align": "right"},
+                    {"key": "metric_value", "label": metric_label, "align": "right"},
+                ],
+                rows,
+            )
+
     if analysis_type in {"manager_era_offense", "manager_era_defense"}:
         rows = payload.get("rows")
         if isinstance(rows, list):

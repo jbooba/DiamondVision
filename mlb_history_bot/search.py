@@ -46,6 +46,7 @@ from .query_utils import (
     question_mentions_yearless_month_day,
 )
 from .retrosheet_splits import RetrosheetSituationalResearcher
+from .retrosheet_inning_records import RetrosheetInningRecordResearcher
 from .retrosheet_streaks import RetrosheetStreakResearcher
 from .roster_comparison import RosterComparisonResearcher
 from .salary_relationships import SalaryRelationshipResearcher
@@ -130,6 +131,7 @@ class BaseballResearchEngine:
         self.team_start_similarity_researcher = TeamStartSimilarityResearcher(settings)
         self.team_season_comparison_researcher = TeamSeasonComparisonResearcher(settings)
         self.retrosheet_situational_researcher = RetrosheetSituationalResearcher(settings)
+        self.retrosheet_inning_record_researcher = RetrosheetInningRecordResearcher(settings)
         self.retrosheet_streak_researcher = RetrosheetStreakResearcher(settings)
         self.special_leaderboard_researcher = SpecialLeaderboardResearcher(settings)
         self.statcast_event_researcher = StatcastEventResearcher(settings)
@@ -195,6 +197,7 @@ class BaseballResearchEngine:
         team_history_snippet = None
         team_split_history_snippet = None
         retrosheet_streak_snippet = None
+        retrosheet_inning_record_snippet = None
         contextual_performance_snippet = None
         special_leaderboard_snippet = None
         salary_relationship_snippet = None
@@ -361,11 +364,14 @@ class BaseballResearchEngine:
             team_split_history_snippet = self.retrosheet_situational_researcher.build_snippet(connection, question)
             if team_split_history_snippet:
                 context.historical_evidence.append(team_split_history_snippet)
+            retrosheet_inning_record_snippet = self.retrosheet_inning_record_researcher.build_snippet(connection, question)
+            if retrosheet_inning_record_snippet:
+                context.historical_evidence.append(retrosheet_inning_record_snippet)
             retrosheet_streak_snippet = self.retrosheet_streak_researcher.build_snippet(connection, question)
             if retrosheet_streak_snippet:
                 context.historical_evidence.append(retrosheet_streak_snippet)
             team_history_snippet = self.team_history_researcher.build_snippet(connection, question)
-            if team_history_snippet and team_split_history_snippet is None and retrosheet_streak_snippet is None:
+            if team_history_snippet and team_split_history_snippet is None and retrosheet_streak_snippet is None and retrosheet_inning_record_snippet is None:
                 context.historical_evidence.append(team_history_snippet)
             if not (cohort_filter_requested and cohort_metric_snippet is None):
                 season_metric_snippet = self.season_metric_researcher.build_snippet(connection, question)
@@ -422,6 +428,7 @@ class BaseballResearchEngine:
                 or manager_era_snippet is not None
                 or season_metric_snippet is not None
                 or salary_relationship_snippet is not None
+                or retrosheet_inning_record_snippet is not None
                 or retrosheet_streak_snippet is not None
                 else self.provider_metric_researcher.build_snippet(question)
             )

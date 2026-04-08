@@ -25,9 +25,12 @@ from .storage import (
 PLAY_STREAK_USECOLS = [
     "gid",
     "batter",
+    "pitcher",
     "pa",
     "ab",
     "k",
+    "walk",
+    "hr",
     "date",
     "gametype",
 ]
@@ -96,7 +99,15 @@ STEAL_STREAK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 EXTRA_BASE_HIT_STREAK_PATTERN = re.compile(
-    r"\bextra[- ]base hit streak\b|\bxbh streak\b|\bconsecutive games?\b.*\bwith\b.*\bextra[- ]base hits?\b|\bgames?\b.*\bwith\b.*\bextra[- ]base hits?\b",
+    r"\bextra[- ]base hit streak\b|\bxbh streak\b|\bstreak of extra[- ]base hits?\b|\bconsecutive games?\b.*\bwith\b.*\bextra[- ]base hits?\b|\bgames?\b.*\bwith\b.*\bextra[- ]base hits?\b",
+    re.IGNORECASE,
+)
+AB_WITH_HOME_RUN_PATTERN = re.compile(
+    r"\bhome runs?\b.*\b(?:straight|consecutive)\b.*\bat[- ]bats?\b|\b(?:straight|consecutive)\b.*\bat[- ]bats?\b.*\bhome runs?\b|\bconsecutive at[- ]bats?\b.*\bhome runs?\b",
+    re.IGNORECASE,
+)
+PITCHER_SINGLE_GAME_WALK_PATTERN = re.compile(
+    r"\bmost consecutive walks?\b.*\bpitcher\b.*\bsingle game\b|\bmost consecutive walks?\b.*\bpitcher\b.*\bone game\b|\bconsecutive walks?\b.*\bby a pitcher\b.*\bsingle game\b|\bconsecutive walks?\b.*\bby a pitcher\b.*\bone game\b",
     re.IGNORECASE,
 )
 GAMES_WITH_STRIKEOUT_PATTERN = re.compile(
@@ -111,7 +122,7 @@ GAMES_WITHOUT_STRIKEOUT_PATTERN = re.compile(
     r"\bgames?\b.*\bwithout\b.*\bstrike(?: ?out|outs?)\b|\bwithout\b.*\bstrike(?: ?out|outs?)\b.*\bgames?\b",
     re.IGNORECASE,
 )
-STREAK_HINT_PATTERN = re.compile(r"\b(longest|most consecutive|record|streak)\b", re.IGNORECASE)
+STREAK_HINT_PATTERN = re.compile(r"\b(longest|most consecutive|consecutive|record|streak|straight|ever)\b", re.IGNORECASE)
 
 
 @dataclass(slots=True, frozen=True)
@@ -209,6 +220,18 @@ STREAK_SPECS: tuple[StreakSpec, ...] = (
         label="extra-base-hit streak",
         unit_label="games",
         aliases=("extra-base-hit streak", "xbh streak", "games with an extra-base hit"),
+    ),
+    StreakSpec(
+        key="ab_with_home_run",
+        label="at-bats with a home run",
+        unit_label="AB",
+        aliases=("home runs in consecutive at-bats", "at-bats with a home run", "straight at-bats with a home run"),
+    ),
+    StreakSpec(
+        key="pitcher_game_consecutive_walks",
+        label="consecutive walks by a pitcher in a single game",
+        unit_label="batters",
+        aliases=("consecutive walks by a pitcher in a single game", "pitcher consecutive walks in one game"),
     ),
     StreakSpec(
         key="games_with_strikeout",
@@ -309,6 +332,10 @@ def find_streak_spec(question: str) -> StreakSpec | None:
         return STREAK_SPEC_BY_KEY["games_with_steal"]
     if EXTRA_BASE_HIT_STREAK_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_with_extra_base_hit"]
+    if AB_WITH_HOME_RUN_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["ab_with_home_run"]
+    if PITCHER_SINGLE_GAME_WALK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["pitcher_game_consecutive_walks"]
     if GAMES_WITH_STRIKEOUT_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_with_strikeout"]
     if ON_BASE_STREAK_PATTERN.search(question):
@@ -436,10 +463,14 @@ def build_play_streak_records(
     best_by_key: dict[str, dict[str, dict[str, Any]]] = {
         "ab_without_strikeout": {},
         "pa_without_strikeout": {},
+        "ab_with_home_run": {},
+        "pitcher_game_consecutive_walks": {},
     }
     current_by_key: dict[str, dict[str, _StreakState]] = {
         "ab_without_strikeout": {},
         "pa_without_strikeout": {},
+        "ab_with_home_run": {},
+        "pitcher_game_consecutive_walks": {},
     }
     total_chunks = 0
     total_regular_pa = 0
@@ -460,15 +491,15 @@ def build_play_streak_records(
             chunk["pa"] = pd.to_numeric(chunk["pa"], errors="coerce").fillna(0).astype(int)
             chunk["ab"] = pd.to_numeric(chunk["ab"], errors="coerce").fillna(0).astype(int)
             chunk["k"] = pd.to_numeric(chunk["k"], errors="coerce").fillna(0).astype(int)
+            chunk["walk"] = pd.to_numeric(chunk["walk"], errors="coerce").fillna(0).astype(int)
+            chunk["hr"] = pd.to_numeric(chunk["hr"], errors="coerce").fillna(0).astype(int)
             total_regular_pa += int(chunk["pa"].sum())
             for row in chunk.itertuples(index=False):
                 batter = str(row.batter or "").strip()
-                if not batter:
-                    continue
                 game_id = str(row.gid or "")
                 game_date = str(row.date or "")
                 season = parse_season(game_date)
-                if row.pa:
+                if batter and row.pa:
                     update_success_streak(
                         best_by_key["pa_without_strikeout"],
                         current_by_key["pa_without_strikeout"],
@@ -480,7 +511,7 @@ def build_play_streak_records(
                         season=season,
                         streak_key="pa_without_strikeout",
                     )
-                if row.ab:
+                if batter and row.ab:
                     update_success_streak(
                         best_by_key["ab_without_strikeout"],
                         current_by_key["ab_without_strikeout"],
@@ -491,6 +522,30 @@ def build_play_streak_records(
                         game_id=game_id,
                         season=season,
                         streak_key="ab_without_strikeout",
+                    )
+                    update_success_streak(
+                        best_by_key["ab_with_home_run"],
+                        current_by_key["ab_with_home_run"],
+                        batter,
+                        success=row.hr == 1,
+                        increment=1,
+                        game_date=game_date,
+                        game_id=game_id,
+                        season=season,
+                        streak_key="ab_with_home_run",
+                    )
+                pitcher = str(row.pitcher or "").strip()
+                if pitcher:
+                    update_single_game_pitcher_streak(
+                        best_by_key["pitcher_game_consecutive_walks"],
+                        current_by_key["pitcher_game_consecutive_walks"],
+                        pitcher,
+                        success=row.walk == 1,
+                        increment=1,
+                        game_date=game_date,
+                        game_id=game_id,
+                        season=season,
+                        streak_key="pitcher_game_consecutive_walks",
                     )
     records = [record for records in best_by_key.values() for record in records.values()]
     messages = [
@@ -735,6 +790,49 @@ def update_success_streak(
         current_states.pop(player_id, None)
         return
     state = current_states.get(player_id)
+    if state is None:
+        state = _StreakState(length=0, start_date=game_date, start_gid=game_id, first_season=season)
+    new_state = _StreakState(
+        length=state.length + increment,
+        start_date=state.start_date,
+        start_gid=state.start_gid,
+        first_season=state.first_season,
+    )
+    current_states[player_id] = new_state
+    best = best_records.get(player_id)
+    if best is None or new_state.length > int(best["streak_length"]):
+        best_records[player_id] = {
+            "player_id": player_id,
+            "streak_key": streak_key,
+            "streak_length": new_state.length,
+            "start_date": new_state.start_date,
+            "end_date": game_date,
+            "start_gid": new_state.start_gid,
+            "end_gid": game_id,
+            "first_season": new_state.first_season,
+            "last_season": season,
+        }
+
+
+def update_single_game_pitcher_streak(
+    best_records: dict[str, dict[str, Any]],
+    current_states: dict[str, _StreakState],
+    player_id: str,
+    *,
+    success: bool,
+    increment: int,
+    game_date: str,
+    game_id: str,
+    season: int,
+    streak_key: str,
+) -> None:
+    state = current_states.get(player_id)
+    if state is not None and state.start_gid != game_id:
+        current_states.pop(player_id, None)
+        state = None
+    if not success:
+        current_states.pop(player_id, None)
+        return
     if state is None:
         state = _StreakState(length=0, start_date=game_date, start_gid=game_id, first_season=season)
     new_state = _StreakState(

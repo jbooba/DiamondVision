@@ -67,6 +67,8 @@ def seed_batting_and_people(connection: sqlite3.Connection) -> None:
             ("willite01", "Ted", "Williams"),
             ("dimagjo01", "Joe", "DiMaggio"),
             ("stairsm01", "Matt", "Stairs"),
+            ("sluggjo01", "Slugger", "Jones"),
+            ("pitchac01", "Pitcher", "Ace"),
         ],
     )
     connection.executemany(
@@ -88,16 +90,25 @@ def seed_batting_and_people(connection: sqlite3.Connection) -> None:
 
 def write_retrosheet_plays(retrosheet_dir: Path) -> None:
     retrosheet_dir.mkdir(parents=True, exist_ok=True)
-    header = "gid,batter,pa,ab,k,date,gametype"
+    header = "gid,batter,pitcher,pa,ab,k,walk,hr,date,gametype"
     rows = [
-        "g1,seweljo01,1,1,0,19220601,regular",
-        "g1,seweljo01,1,1,0,19220601,regular",
-        "g1,seweljo01,1,1,0,19220601,regular",
-        "g2,seweljo01,1,1,1,19220602,regular",
-        "g3,willite01,1,1,0,19410701,regular",
-        "g3,willite01,1,1,0,19410701,regular",
-        "g3,willite01,1,0,0,19410701,regular",
-        "g4,willite01,1,1,1,19410702,regular",
+        "g1,seweljo01,pitchac01,1,1,0,0,0,19220601,regular",
+        "g1,seweljo01,pitchac01,1,1,0,0,0,19220601,regular",
+        "g1,seweljo01,pitchac01,1,1,0,0,0,19220601,regular",
+        "g1,seweljo01,pitchac01,1,1,0,0,0,19220601,regular",
+        "g2,seweljo01,pitchac01,1,1,1,0,0,19220602,regular",
+        "g3,willite01,pitchac01,1,1,0,0,0,19410701,regular",
+        "g3,willite01,pitchac01,1,1,0,0,0,19410701,regular",
+        "g3,willite01,pitchac01,1,0,0,0,0,19410701,regular",
+        "g4,willite01,pitchac01,1,1,1,0,0,19410702,regular",
+        "g5,sluggjo01,pitchac01,1,1,0,0,1,20010501,regular",
+        "g5,sluggjo01,pitchac01,1,1,0,0,1,20010501,regular",
+        "g6,sluggjo01,pitchac01,1,1,0,0,1,20010502,regular",
+        "g6,sluggjo01,pitchac01,1,1,0,0,1,20010502,regular",
+        "g7,otherpl01,pitchac01,1,0,0,1,0,20010503,regular",
+        "g7,otherpl02,pitchac01,1,0,0,1,0,20010503,regular",
+        "g7,otherpl03,pitchac01,1,0,0,1,0,20010503,regular",
+        "g7,otherpl04,pitchac01,1,1,1,0,0,20010503,regular",
     ]
     (retrosheet_dir / "plays.csv").write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
 
@@ -125,13 +136,13 @@ def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Pa
         assert ab_snippet is not None
         assert ab_snippet.payload["analysis_type"] == "player_streak_leaderboard"
         assert ab_snippet.payload["rows"][0]["player_name"] == "Joe Sewell"
-        assert ab_snippet.payload["rows"][0]["streak_length"] == 3
+        assert ab_snippet.payload["rows"][0]["streak_length"] == 4
 
         spaced_phrase = researcher.build_snippet(connection, "what's the longest at bat streak without a strike out?")
         assert spaced_phrase is not None
         assert spaced_phrase.payload["analysis_type"] == "player_streak_leaderboard"
         assert spaced_phrase.payload["rows"][0]["player_name"] == "Joe Sewell"
-        assert spaced_phrase.payload["rows"][0]["streak_length"] == 3
+        assert spaced_phrase.payload["rows"][0]["streak_length"] == 4
 
         walk_snippet = researcher.build_snippet(connection, "who has the longest walk streak")
         assert walk_snippet is not None
@@ -147,5 +158,20 @@ def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Pa
         assert hit_snippet is not None
         assert hit_snippet.payload["rows"][0]["player_name"] == "Joe DiMaggio"
         assert hit_snippet.payload["rows"][0]["streak_length"] == 3
+
+        xbh_snippet = researcher.build_snippet(connection, "what is the longest streak of extra base hits in MLB history")
+        assert xbh_snippet is not None
+        assert xbh_snippet.payload["rows"][0]["player_name"] == "Matt Stairs"
+        assert xbh_snippet.payload["rows"][0]["streak_length"] == 2
+
+        hr_ab_snippet = researcher.build_snippet(connection, "has anyone ever hit a home run in four straight at bats?")
+        assert hr_ab_snippet is not None
+        assert hr_ab_snippet.payload["rows"][0]["player_name"] == "Slugger Jones"
+        assert hr_ab_snippet.payload["rows"][0]["streak_length"] == 4
+
+        pitcher_walks_snippet = researcher.build_snippet(connection, "what is the most consecutive walks recorded by a pitcher in a single game")
+        assert pitcher_walks_snippet is not None
+        assert pitcher_walks_snippet.payload["rows"][0]["player_name"] == "Pitcher Ace"
+        assert pitcher_walks_snippet.payload["rows"][0]["streak_length"] == 3
     finally:
         connection.close()
