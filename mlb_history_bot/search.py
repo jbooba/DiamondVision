@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from datetime import date
 from typing import Any
 
@@ -29,6 +30,7 @@ from .metrics import MetricCatalog
 from .models import CompiledContext, EvidenceSnippet
 from .pitching_staff_comparison import PitchingStaffComparisonResearcher
 from .pitch_arsenal_leaderboards import PitchArsenalLeaderboardResearcher
+from .person_query import choose_best_person_match
 from .player_metric_lookup import PlayerMetricLookupResearcher
 from .player_team_relationships import PlayerTeamRelationshipResearcher
 from .player_season_comparison import PlayerSeasonComparisonResearcher
@@ -709,6 +711,7 @@ class BaseballResearchEngine:
         row = max(candidate_rows, key=lambda item: self._player_profile_rank(connection, item, player_name))
 
         player_id = row["playerid"]
+        live_profile = self._lookup_live_person_profile(player_name)
         latest_team = self._latest_player_team(connection, player_id)
         primary_position = self._latest_player_position(connection, player_id)
         batting_summary = self._aggregate_player_totals(
@@ -735,10 +738,12 @@ class BaseballResearchEngine:
             },
         )
         parts: list[str] = []
-        full_name = f"{row['namefirst']} {row['namelast']}".strip()
+        full_name = str((live_profile or {}).get("fullName") or f"{row['namefirst']} {row['namelast']}".strip()).strip()
         handedness_bits: list[str] = []
-        bats = str(row["bats"] or "").strip()
-        throws = str(row["throws"] or "").strip()
+        live_bat_side = (live_profile or {}).get("batSide", {}) if isinstance((live_profile or {}).get("batSide"), dict) else {}
+        live_pitch_hand = (live_profile or {}).get("pitchHand", {}) if isinstance((live_profile or {}).get("pitchHand"), dict) else {}
+        bats = str(live_bat_side.get("code") or row["bats"] or "").strip()
+        throws = str(live_pitch_hand.get("code") or row["throws"] or "").strip()
         if bats:
             handedness_bits.append(
                 {
@@ -758,31 +763,29 @@ class BaseballResearchEngine:
         identity_parts: list[str] = []
         if handedness_bits:
             identity_parts.append(", ".join(filter(None, handedness_bits)))
-        if primary_position:
+        live_position = (
+            str(((live_profile or {}).get("primaryPosition") or {}).get("name") or "").strip()
+            if isinstance((live_profile or {}).get("primaryPosition"), dict)
+            else ""
+        )
+        if live_position:
+            identity_parts.append(live_position)
+        elif primary_position:
             identity_parts.append(primary_position)
-        if latest_team:
+        current_team = (
+            str(((live_profile or {}).get("currentTeam") or {}).get("name") or "").strip()
+            if isinstance((live_profile or {}).get("currentTeam"), dict)
+            else ""
+        )
+        if current_team:
+            identity_parts.append(f"currently with {current_team}")
+        elif latest_team:
             identity_parts.append(f"latest imported team: {latest_team}")
         if identity_parts:
             parts.append(f"{full_name} is an MLB player listed in Lahman as a {'; '.join(identity_parts)}.")
-        birth_parts: list[str] = []
-        birth_city = str(row["birthcity"] or "").strip() if "birthcity" in row.keys() else ""
-        birth_state = str(row["birthstate"] or "").strip() if "birthstate" in row.keys() else ""
-        birth_country = str(row["birthcountry"] or "").strip() if "birthcountry" in row.keys() else ""
-        birth_year = str(row["birthyear"] or "").strip() if "birthyear" in row.keys() else ""
-        if birth_city:
-            birth_parts.append(birth_city)
-        if birth_state:
-            birth_parts.append(birth_state)
-        if birth_country:
-            birth_parts.append(birth_country)
-        if birth_parts or birth_year:
-            location = ", ".join(part for part in birth_parts if part)
-            if birth_year and location:
-                parts.append(f"Born in {location} in {birth_year}.")
-            elif location:
-                parts.append(f"Born in {location}.")
-            elif birth_year:
-                parts.append(f"Born in {birth_year}.")
+        birth_sentence, birth_payload = self._build_player_birth_details(row, live_profile)
+        if birth_sentence:
+            parts.append(birth_sentence)
         debut = str(row["debut"] or "").strip() if "debut" in row.keys() else ""
         final_game = str(row["finalgame"] or "").strip() if "finalgame" in row.keys() else ""
         if debut:
@@ -805,17 +808,94 @@ class BaseballResearchEngine:
                 f"{innings} IP."
             )
         summary = " ".join(parts) if parts else "Player found in Lahman with no imported totals yet."
+        uses_live_profile = live_profile is not None
         return EvidenceSnippet(
-            source="Lahman Database",
+            source="Player Profile" if uses_live_profile else "Lahman Database",
             title=f"{full_name} career summary",
-            citation="Lahman People/Batting/Pitching tables",
+            citation=(
+                "Lahman People/Batting/Pitching tables + MLB Stats API people endpoint"
+                if uses_live_profile
+                else "Lahman People/Batting/Pitching tables"
+            ),
             summary=summary,
             payload={
                 "player_id": player_id,
+                "birth_date": birth_payload.get("birth_date", ""),
+                "current_team": current_team,
                 "debut": row["debut"] if "debut" in row.keys() else "",
                 "final_game": row["finalgame"] if "finalgame" in row.keys() else "",
             },
         )
+
+    def _lookup_live_person_profile(self, player_name: str) -> dict[str, Any] | None:
+        try:
+            people = self.live_client.search_people(player_name)
+        except Exception:
+            return None
+        if not people:
+            return None
+        selected = choose_best_person_match(people, player_name)
+        profile: dict[str, Any] = dict(selected)
+        player_id = int(selected.get("id") or 0)
+        if player_id:
+            try:
+                details = self.live_client.person_details(player_id)
+            except Exception:
+                details = None
+            if details:
+                profile.update(details)
+        return profile
+
+    def _build_player_birth_details(
+        self,
+        row: sqlite3.Row,
+        live_profile: dict[str, Any] | None,
+    ) -> tuple[str | None, dict[str, str]]:
+        live_birth_date = str((live_profile or {}).get("birthDate") or "").strip()
+        live_birth_city = str((live_profile or {}).get("birthCity") or "").strip()
+        live_birth_state = str((live_profile or {}).get("birthStateProvince") or "").strip()
+        live_birth_country = str((live_profile or {}).get("birthCountry") or "").strip()
+        if live_birth_date:
+            try:
+                parsed = date.fromisoformat(live_birth_date)
+                date_text = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            except ValueError:
+                date_text = live_birth_date
+            location_parts = [part for part in (live_birth_city, live_birth_state, live_birth_country) if part]
+            if location_parts:
+                return (
+                    f"Born on {date_text} in {', '.join(location_parts)}.",
+                    {"birth_date": live_birth_date},
+                )
+            return (f"Born on {date_text}.", {"birth_date": live_birth_date})
+
+        birth_year = str(row["birthyear"] or "").strip() if "birthyear" in row.keys() else ""
+        birth_month = str(row["birthmonth"] or "").strip() if "birthmonth" in row.keys() else ""
+        birth_day = str(row["birthday"] or "").strip() if "birthday" in row.keys() else ""
+        birth_city = str(row["birthcity"] or "").strip() if "birthcity" in row.keys() else ""
+        birth_state = str(row["birthstate"] or "").strip() if "birthstate" in row.keys() else ""
+        birth_country = str(row["birthcountry"] or "").strip() if "birthcountry" in row.keys() else ""
+        location_parts = [part for part in (birth_city, birth_state, birth_country) if part]
+        location = ", ".join(location_parts)
+        if birth_year and birth_month and birth_day:
+            try:
+                parsed = date(int(birth_year), int(birth_month), int(birth_day))
+                date_text = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+                if location:
+                    return (
+                        f"Born on {date_text} in {location}.",
+                        {"birth_date": parsed.isoformat()},
+                    )
+                return (f"Born on {date_text}.", {"birth_date": parsed.isoformat()})
+            except ValueError:
+                pass
+        if location or birth_year:
+            if birth_year and location:
+                return (f"Born in {location} in {birth_year}.", {"birth_date": birth_year})
+            if location:
+                return (f"Born in {location}.", {"birth_date": ""})
+            return (f"Born in {birth_year}.", {"birth_date": birth_year})
+        return (None, {"birth_date": ""})
 
     def _player_profile_rank(self, connection, row, requested_name: str) -> tuple[int, int, int, int, str]:
         full_name = " ".join(
