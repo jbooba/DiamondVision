@@ -112,7 +112,15 @@ class SportyReplayFinder:
         replay_query = build_replay_query(question, self.settings.live_season or date.today().year)
         if replay_query is None:
             return []
+        return self._build_snippets_for_query(replay_query)
 
+    def build_recent_player_snippets(self, question: str) -> list[EvidenceSnippet]:
+        replay_query = build_recent_player_replay_query(question, self.settings.live_season or date.today().year)
+        if replay_query is None:
+            return []
+        return self._build_snippets_for_query(replay_query)
+
+    def _build_snippets_for_query(self, replay_query: ReplayQuery) -> list[EvidenceSnippet]:
         clips = self.find_relevant_clips(replay_query)
         if not clips:
             return [self._empty_result_snippet(replay_query)]
@@ -427,6 +435,8 @@ def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
         return None
     if target_date is None and not player_queries:
         return None
+    if target_date is None and not has_visual_intent and not replay_tags:
+        return None
     if not has_visual_intent and not player_queries:
         return None
     if not player_queries and not replay_tags and not has_visual_intent:
@@ -447,6 +457,21 @@ def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
         date_label=target_date.isoformat(),
         player_queries=player_queries[:2],
         replay_tags=replay_tags,
+    )
+
+
+def build_recent_player_replay_query(question: str, default_year: int) -> ReplayQuery | None:
+    player_queries = extract_name_candidates(question)
+    if not player_queries:
+        return None
+    end_date = resolve_recent_replay_end_date(default_year)
+    start_date = end_date - timedelta(days=120)
+    return ReplayQuery(
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        date_label=f"{start_date.isoformat()} through {end_date.isoformat()}",
+        player_queries=player_queries[:2],
+        replay_tags=[],
     )
 
 

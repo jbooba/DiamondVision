@@ -89,6 +89,9 @@ class FakeReplayFinder:
     def build_snippets(self, question: str):
         return []
 
+    def build_recent_player_snippets(self, question: str):
+        return []
+
 
 def build_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")

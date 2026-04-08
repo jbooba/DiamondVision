@@ -11,7 +11,7 @@ from .models import EvidenceSnippet
 from .provider_metrics import extract_team_filter, normalize_team_value
 from .pybaseball_adapter import load_statcast_pitcher_arsenal_stats, load_statcast_pitcher_pitch_arsenal
 from .query_intent import detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
-from .query_utils import extract_referenced_season
+from .query_utils import extract_name_candidates, extract_referenced_season
 from .storage import get_connection, table_exists
 
 
@@ -47,6 +47,14 @@ class PitchArsenalQuery:
     scope_label: str
     min_pitches: int
     team_filter: str | None
+    mode: str
+
+
+@dataclass(slots=True)
+class PitchArsenalLookupQuery:
+    pitcher_name: str
+    season: int | None
+    scope_label: str
     mode: str
 
 
@@ -104,27 +112,47 @@ class PitchArsenalLeaderboardResearcher:
     def build_snippet(self, question: str) -> EvidenceSnippet | None:
         current_season = self.settings.live_season or date.today().year
         query = parse_pitch_arsenal_query(question, current_season)
-        if query is None:
+        if query is not None:
+            leaders = run_pitch_arsenal_query(self.settings, query)
+            if not leaders:
+                return None
+            mode = "live" if query.mode == "live" else "historical"
+            summary = build_pitch_arsenal_summary(query, leaders)
+            return EvidenceSnippet(
+                source="Pitch Arsenal Leaderboards",
+                title=f"{query.scope_label} {query.pitch_family.label} {query.metric.label} leaderboard",
+                citation="pybaseball statcast_pitcher_pitch_arsenal plus statcast_pitcher_arsenal_stats",
+                summary=summary,
+                payload={
+                    "analysis_type": "pitch_arsenal_leaderboard",
+                    "mode": mode,
+                    "metric": query.metric.label,
+                    "pitch_family": query.pitch_family.label,
+                    "scope_label": query.scope_label,
+                    "leaders": leaders,
+                    "min_pitches": query.min_pitches,
+                    "team_filter": query.team_filter,
+                },
+            )
+        lookup_query = parse_pitch_arsenal_lookup_query(question, current_season)
+        if lookup_query is None:
             return None
-        leaders = run_pitch_arsenal_query(self.settings, query)
-        if not leaders:
+        repertoire = run_pitch_arsenal_lookup(self.settings, lookup_query)
+        if not repertoire:
             return None
-        mode = "live" if query.mode == "live" else "historical"
-        summary = build_pitch_arsenal_summary(query, leaders)
+        summary = build_pitch_arsenal_lookup_summary(lookup_query, repertoire)
         return EvidenceSnippet(
             source="Pitch Arsenal Leaderboards",
-            title=f"{query.scope_label} {query.pitch_family.label} {query.metric.label} leaderboard",
-            citation="pybaseball statcast_pitcher_pitch_arsenal plus statcast_pitcher_arsenal_stats",
+            title=f"{repertoire[0]['season']} {lookup_query.pitcher_name} pitch mix",
+            citation="local statcast_pitch_type_games summaries plus pybaseball statcast arsenal tables when needed",
             summary=summary,
             payload={
-                "analysis_type": "pitch_arsenal_leaderboard",
-                "mode": mode,
-                "metric": query.metric.label,
-                "pitch_family": query.pitch_family.label,
-                "scope_label": query.scope_label,
-                "leaders": leaders,
-                "min_pitches": query.min_pitches,
-                "team_filter": query.team_filter,
+                "analysis_type": "pitch_arsenal_lookup",
+                "mode": lookup_query.mode,
+                "scope_label": lookup_query.scope_label,
+                "pitcher_name": lookup_query.pitcher_name,
+                "season": repertoire[0]["season"],
+                "repertoire": repertoire,
             },
         )
 
@@ -155,7 +183,7 @@ def parse_pitch_arsenal_query(question: str, current_season: int) -> PitchArsena
         end_season = current_season
         scope_label = "Statcast era"
         mode = "historical"
-    elif mentions_current_scope(lowered) or explicit_year is None:
+    elif mentions_current_scope(lowered):
         start_season = current_season
         end_season = current_season
         scope_label = str(current_season)
@@ -209,6 +237,75 @@ def extract_minimum_pitches(lowered_question: str) -> int | None:
     match = re.search(r"(?:minimum|at least|min\.?)\s+of?\s*(\d+)\s+(?:pitch|pitches|" r"sliders|curveballs|changeups|fastballs)", lowered_question)
     if match:
         return int(match.group(1))
+    return None
+
+
+def parse_pitch_arsenal_lookup_query(question: str, current_season: int) -> PitchArsenalLookupQuery | None:
+    lowered = question.lower()
+    if not any(
+        phrase in lowered
+        for phrase in (
+            "what pitches does",
+            "what does",
+            "pitch mix",
+            "repertoire",
+            "arsenal",
+            "what does he throw",
+            "what does she throw",
+            "what does he feature",
+            "what does she feature",
+            "what does he mix",
+            "what does she mix",
+        )
+    ):
+        return None
+    if looks_like_leaderboard_question(lowered):
+        return None
+    pitcher_name = extract_pitcher_lookup_name(question)
+    if not pitcher_name:
+        return None
+    referenced_season = extract_referenced_season(question, current_season)
+    if referenced_season is not None:
+        return PitchArsenalLookupQuery(
+            pitcher_name=pitcher_name,
+            season=referenced_season,
+            scope_label=str(referenced_season),
+            mode="live" if referenced_season == current_season else "historical",
+        )
+    if mentions_current_scope(lowered):
+        return PitchArsenalLookupQuery(
+            pitcher_name=pitcher_name,
+            season=current_season,
+            scope_label=str(current_season),
+            mode="live",
+        )
+    return PitchArsenalLookupQuery(
+        pitcher_name=pitcher_name,
+        season=None,
+        scope_label="latest available season",
+        mode="historical",
+    )
+
+
+def extract_pitcher_lookup_name(question: str) -> str | None:
+    names = extract_name_candidates(question)
+    if names:
+        return names[0]
+    stripped = question.strip(" ?!.")
+    patterns = (
+        re.compile(r"what pitches does\s+(.+?)\s+throw\b", re.IGNORECASE),
+        re.compile(r"what does\s+(.+?)\s+throw\b", re.IGNORECASE),
+        re.compile(r"(?:what is|what's)\s+(.+?)'s\s+(?:pitch mix|arsenal|repertoire)\b", re.IGNORECASE),
+        re.compile(r"(?:pitch mix|arsenal|repertoire)\s+(?:for|of)\s+(.+?)\b", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        match = pattern.search(stripped)
+        if not match:
+            continue
+        candidate = str(match.group(1) or "").strip(" ?!.,'\"")
+        candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE)
+        if " " in candidate:
+            return " ".join(part.capitalize() for part in candidate.split())
     return None
 
 
@@ -302,6 +399,129 @@ def build_local_pitch_type_filter(query: PitchArsenalQuery) -> tuple[str, list[A
     return " AND ".join(clauses), params
 
 
+def run_pitch_arsenal_lookup(settings: Settings, query: PitchArsenalLookupQuery) -> list[dict[str, Any]]:
+    resolved_season: int | None = query.season
+    rows: list[dict[str, Any]] = []
+    connection = get_connection(settings.database_path)
+    try:
+        if table_exists(connection, "statcast_pitch_type_games"):
+            resolved_season = query.season or lookup_latest_pitch_arsenal_season(connection, query.pitcher_name)
+            if resolved_season is not None:
+                rows = load_local_pitch_arsenal_repertoire(connection, query.pitcher_name, resolved_season)
+    finally:
+        connection.close()
+    if not rows:
+        resolved_season = resolved_season or query.season or settings.live_season or date.today().year
+        rows = load_provider_pitch_arsenal_repertoire(query.pitcher_name, resolved_season)
+    if not rows:
+        return []
+    total_pitches = sum(row["pitch_count"] or 0 for row in rows)
+    repertoire: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        pitch_count = row["pitch_count"] or 0
+        usage_pct = (pitch_count / total_pitches * 100.0) if total_pitches else None
+        repertoire.append(
+            {
+                "rank": index,
+                "season": resolved_season,
+                "pitcher_name": row["pitcher_name"],
+                "team": row["team"],
+                "pitch_label": row["pitch_label"],
+                "pitch_family": row["pitch_family"],
+                "pitch_type": row["pitch_type"],
+                "pitch_count": pitch_count,
+                "usage_pct": usage_pct,
+                "avg_speed": row["avg_speed"],
+                "avg_spin": row["avg_spin"],
+            }
+        )
+    return repertoire
+
+
+def load_provider_pitch_arsenal_repertoire(pitcher_name: str, season: int) -> list[dict[str, Any]]:
+    rows = load_statcast_pitcher_arsenal_stats(season, min_pa=1)
+    if not rows:
+        return []
+    lowered_name = pitcher_name.lower()
+    matching_rows = [
+        row
+        for row in rows
+        if lowered_name == str(row.get("last_name, first_name") or "").lower()
+        or lowered_name in format_pitcher_name(str(row.get("last_name, first_name") or "")).lower()
+        or lowered_name == str(row.get("player_name") or "").lower()
+        or lowered_name in str(row.get("player_name") or "").lower()
+    ]
+    if not matching_rows:
+        return []
+    repertoire: list[dict[str, Any]] = []
+    for row in matching_rows:
+        pitch_type = str(row.get("pitch_type") or "").strip().upper()
+        pitch_label = str(row.get("pitch_name") or PITCH_TYPE_LABELS.get(pitch_type.lower(), "")).strip()
+        repertoire.append(
+            {
+                "pitcher_name": format_pitcher_name(str(row.get("last_name, first_name") or row.get("player_name") or pitcher_name)),
+                "team": normalize_team_value(row.get("team_name_alt")),
+                "pitch_type": pitch_type,
+                "pitch_label": pitch_label,
+                "pitch_family": str(row.get("pitch_family") or infer_pitch_family_from_type(pitch_type)),
+                "pitch_count": safe_int(row.get("pitches")),
+                "avg_speed": safe_float(row.get("release_speed")),
+                "avg_spin": safe_float(row.get("release_spin_rate")),
+            }
+        )
+    repertoire.sort(key=lambda row: ((row["pitch_count"] or 0), row["pitch_label"]), reverse=True)
+    return repertoire
+
+
+def lookup_latest_pitch_arsenal_season(connection, pitcher_name: str) -> int | None:
+    row = connection.execute(
+        """
+        SELECT MAX(season) AS season
+        FROM statcast_pitch_type_games
+        WHERE lower(pitcher_name) = ?
+           OR lower(pitcher_name) LIKE ?
+        """,
+        (pitcher_name.lower(), f"%{pitcher_name.lower()}%"),
+    ).fetchone()
+    return safe_int(row["season"]) if row is not None else None
+
+
+def load_local_pitch_arsenal_repertoire(connection, pitcher_name: str, season: int) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT
+            pitcher_name,
+            team,
+            pitch_type,
+            MIN(pitch_name) AS pitch_label,
+            MIN(pitch_family) AS pitch_family,
+            SUM(pitches) AS pitch_count,
+            AVG(avg_release_speed) AS avg_speed,
+            AVG(avg_release_spin_rate) AS avg_spin
+        FROM statcast_pitch_type_games
+        WHERE season = ?
+          AND (lower(pitcher_name) = ? OR lower(pitcher_name) LIKE ?)
+        GROUP BY pitcher_name, team, pitch_type
+        HAVING SUM(pitches) > 0
+        ORDER BY pitch_count DESC, pitch_label ASC
+        """,
+        (season, pitcher_name.lower(), f"%{pitcher_name.lower()}%"),
+    ).fetchall()
+    return [
+        {
+            "pitcher_name": str(row["pitcher_name"] or pitcher_name),
+            "team": normalize_team_value(row["team"]),
+            "pitch_type": str(row["pitch_type"] or ""),
+            "pitch_label": str(row["pitch_label"] or PITCH_TYPE_LABELS.get(str(row["pitch_type"] or "").lower(), "")),
+            "pitch_family": str(row["pitch_family"] or ""),
+            "pitch_count": safe_int(row["pitch_count"]),
+            "avg_speed": safe_float(row["avg_speed"]),
+            "avg_spin": safe_float(row["avg_spin"]),
+        }
+        for row in rows
+    ]
+
+
 def pitch_family_sql_filter(family: PitchFamilySpec) -> tuple[str, list[Any]]:
     if family.key == "slider":
         return "(pitch_family = ?)", ["slider"]
@@ -326,6 +546,21 @@ def pitch_family_sql_filter(family: PitchFamilySpec) -> tuple[str, list[Any]]:
     if family.key == "knuckleball":
         return "(pitch_type = ?)", ["KN"]
     return "(pitch_family = ?)", [family.key]
+
+
+def infer_pitch_family_from_type(pitch_type: str) -> str:
+    normalized = pitch_type.strip().upper()
+    if normalized in {"FF", "SI", "FC"}:
+        return "fastball"
+    if normalized in {"SL", "ST", "SV"}:
+        return "slider"
+    if normalized in {"CU"}:
+        return "curveball"
+    if normalized in {"CH", "FS"}:
+        return "changeup"
+    if normalized in {"KN"}:
+        return "knuckleball"
+    return ""
 
 
 def load_pitch_arsenal_rows(season: int, arsenal_type: str, min_pitches: int) -> list[dict[str, Any]]:
@@ -431,6 +666,33 @@ def build_pitch_arsenal_summary(query: PitchArsenalQuery, leaders: list[dict[str
     return summary
 
 
+def build_pitch_arsenal_lookup_summary(query: PitchArsenalLookupQuery, repertoire: list[dict[str, Any]]) -> str:
+    leader = repertoire[0]
+    team_text = f" for {leader['team']}" if leader.get("team") else ""
+    summary = (
+        f"{leader['pitcher_name']}'s tracked {leader['season']} pitch mix{team_text} is led by "
+        f"{leader['pitch_label']} ({format_usage_pct(leader['usage_pct'])}, {leader['pitch_count']} pitches"
+    )
+    if leader.get("avg_speed") is not None:
+        summary = f"{summary}, {leader['avg_speed']:.1f} mph"
+    summary = f"{summary})."
+    trailing = repertoire[1:5]
+    if trailing:
+        summary = (
+            f"{summary} Other core offerings: "
+            + "; ".join(
+                f"{row['pitch_label']} {format_usage_pct(row['usage_pct'])}"
+                + (f", {row['avg_speed']:.1f} mph" if row.get("avg_speed") is not None else "")
+                for row in trailing
+            )
+            + "."
+        )
+    summary = (
+        f"{summary} Ranked by usage share from local Statcast pitch-type summaries, so this reflects repertoire mix rather than just raw pitch labels."
+    )
+    return summary
+
+
 def format_pitcher_name(value: str) -> str:
     if not value:
         return ""
@@ -473,3 +735,10 @@ def format_metric_value(value: Any, unit: str) -> str:
     if unit == "rpm":
         return f"{numeric:.0f} rpm"
     return f"{numeric:.1f} {unit}"
+
+
+def format_usage_pct(value: Any) -> str:
+    numeric = safe_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.1f}%"

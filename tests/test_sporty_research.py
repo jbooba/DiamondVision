@@ -26,6 +26,9 @@ class FakeReplayFinder:
             )
         ]
 
+    def build_recent_player_snippets(self, question: str) -> list[EvidenceSnippet]:
+        return self.build_snippets(question)
+
 
 def build_test_database(path: Path) -> None:
     connection = sqlite3.connect(path)

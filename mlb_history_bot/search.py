@@ -562,6 +562,17 @@ class BaseballResearchEngine:
             sporty_replay_snippets = self.sporty_replay_finder.build_snippets(question)
             context.replay_evidence.extend(sporty_replay_snippets)
 
+        should_try_supplemental_player_replay = (
+            not context.replay_evidence
+            and extract_name_candidates(question)
+            and (
+                pitch_arsenal_snippet is not None
+                or self._looks_like_profile_lookup(question)
+            )
+        )
+        if should_try_supplemental_player_replay:
+            context.replay_evidence.extend(self.sporty_replay_finder.build_recent_player_snippets(question))
+
         if (
             context.classification in {"live", "hybrid"}
             and not story_snippets
@@ -1016,6 +1027,18 @@ class BaseballResearchEngine:
             or re.search(r"\bbio(?:graphy)?\b", lowered)
             or re.search(r"\bbirthday\b", lowered)
             or re.search(r"\bbirth\s+date\b", lowered)
+        )
+
+    @staticmethod
+    def _looks_like_profile_lookup(question: str) -> bool:
+        lowered = question.lower().strip()
+        if not extract_name_candidates(question):
+            return False
+        return bool(
+            re.search(r"\bwho\s+(?:is|was)\b", lowered)
+            or re.search(r"\btell\s+me\s+about\b", lowered)
+            or re.search(r"\bbio(?:graphy)?\b", lowered)
+            or re.search(r"\bprofile\b", lowered)
         )
 
     def _latest_player_team(self, connection, player_id: str) -> str:

@@ -122,3 +122,7 @@ def test_wants_sporty_replay_false_without_play_context() -> None:
 
 def test_wants_sporty_replay_false_for_historical_leaderboard_question() -> None:
     assert wants_sporty_replay("Which player has hit the most home runs on August 1st?", 2026) is False
+
+
+def test_wants_sporty_replay_false_for_pitch_arsenal_lookup_question() -> None:
+    assert wants_sporty_replay("what pitches does Sandy Alcantara throw?", 2026) is False
