@@ -619,6 +619,23 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 )
             return build_table_display(columns, rows)
 
+    if analysis_type == "player_team_span_leaderboard":
+        rows = payload.get("rows")
+        metric_total_label = str(payload.get("metric_total_label") or "Total")
+        if isinstance(rows, list):
+            return build_table_display(
+                [
+                    {"key": "rank", "label": "#", "align": "right"},
+                    {"key": "player_name", "label": "Player", "align": "left"},
+                    {"key": "team_count", "label": "Teams", "align": "right"},
+                    {"key": "metric_total", "label": metric_total_label, "align": "right"},
+                    {"key": "first_season", "label": "From", "align": "right"},
+                    {"key": "last_season", "label": "To", "align": "right"},
+                    {"key": "teams", "label": "Team IDs", "align": "left"},
+                ],
+                rows,
+            )
+
     if analysis_type in {"manager_era_offense", "manager_era_defense"}:
         rows = payload.get("rows")
         if isinstance(rows, list):

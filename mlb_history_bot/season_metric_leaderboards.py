@@ -91,7 +91,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("ops", "OPS", ("ops", "on-base plus slugging", "on base plus slugging"), "historical", "hitter", "player", True, ".3f", "plate_appearances", 25),
     SeasonMetricSpec("obp", "OBP", ("obp", "on-base percentage", "on base percentage"), "historical", "hitter", "player", True, ".3f", "plate_appearances", 25),
     SeasonMetricSpec("slg", "SLG", ("slg", "slugging percentage", "slugging"), "historical", "hitter", "player", True, ".3f", "at_bats", 25),
-    SeasonMetricSpec("avg", "AVG", ("avg", "batting average"), "historical", "hitter", "player", True, ".3f", "at_bats", 25),
+    SeasonMetricSpec("avg", "AVG", ("avg", "ba", "batting average"), "historical", "hitter", "player", True, ".3f", "at_bats", 25),
     SeasonMetricSpec("total_bases", "TB", ("total bases", "tb"), "historical", "hitter", "player", True, ".0f", "at_bats", 5),
     SeasonMetricSpec("extra_base_hits", "XBH", ("extra-base hits", "extra base hits", "xbh"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("singles", "Singles", ("singles", "single"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
@@ -138,7 +138,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("doubles", "2B", ("doubles", "double", "2b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("triples", "3B", ("triples", "triple", "3b"), "historical", "team", "team", True, ".0f", "games", 10),
     SeasonMetricSpec("walks", "BB", ("walks", "walk"), "historical", "team", "team", True, ".0f", "games", 10),
-    SeasonMetricSpec("avg", "AVG", ("batting average", "avg"), "historical", "team", "team", True, ".3f", "games", 10),
+    SeasonMetricSpec("avg", "AVG", ("batting average", "avg", "ba"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("obp", "OBP", ("obp", "on-base percentage", "on base percentage"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("slg", "SLG", ("slg", "slugging percentage", "slugging"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("ops", "OPS", ("ops", "on-base plus slugging", "on base plus slugging"), "historical", "team", "team", True, ".3f", "games", 10),
@@ -147,7 +147,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("fielding_pct", "Fld%", ("fielding percentage", "fielding pct", "fielding"), "historical", "team", "team", True, ".3f", "games", 10),
     SeasonMetricSpec("plate_appearances", "PA", ("plate appearances", "pa"), "statcast", "hitter", "player", True, ".0f", "plate_appearances", 10),
     SeasonMetricSpec("at_bats", "AB", ("at bats", "ab"), "statcast", "hitter", "player", True, ".0f", "at_bats", 10),
-    SeasonMetricSpec("avg", "AVG", ("avg", "batting average"), "statcast", "hitter", "player", True, ".3f", "at_bats", 20),
+    SeasonMetricSpec("avg", "AVG", ("avg", "ba", "batting average"), "statcast", "hitter", "player", True, ".3f", "at_bats", 20),
     SeasonMetricSpec("obp", "OBP", ("obp", "on-base percentage", "on base percentage"), "statcast", "hitter", "player", True, ".3f", "plate_appearances", 20),
     SeasonMetricSpec("slg", "SLG", ("slg", "slugging percentage", "slugging"), "statcast", "hitter", "player", True, ".3f", "at_bats", 20),
     SeasonMetricSpec("ops", "OPS", ("ops", "on-base plus slugging", "on base plus slugging"), "statcast", "hitter", "player", True, ".3f", "plate_appearances", 20),
@@ -324,7 +324,7 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
                     continue
                 score = len(alias_lower)
             else:
-                token = alias_lower if alias_lower.startswith(" ") else f" {alias_lower} "
+                token = f" {alias_lower} "
                 if token not in lowered_question:
                     continue
                 score = len(alias_lower)
@@ -951,6 +951,59 @@ def fetch_provider_metric_group_rows(
 
 
 def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
+    rows = fetch_statcast_batter_summary_rows(connection, query)
+    if not rows:
+        rows = fetch_statcast_batter_event_rows(connection, query)
+    if not rows:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = statcast_batter_metric_values(row)
+        if not passes_sample_threshold(query.metric, metrics):
+            continue
+        metric_value = metrics.get(query.metric.key)
+        if metric_value is None:
+            continue
+        scope_start, scope_end, scope_text = row_scope(row)
+        candidates.append(
+            {
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
+                "player_name": str(row["player_name"] or ""),
+                "team": str(row["team"] or ""),
+                "metric_value": float(metric_value),
+                "sample_size": float(metrics.get(query.metric.sample_basis or "plate_appearances") or 0),
+                "plate_appearances": safe_int(row["plate_appearances"]) or 0,
+                "at_bats": safe_int(row["at_bats"]) or 0,
+                "hits": safe_int(row["hits"]) or 0,
+                "singles": safe_int(row["singles"]) or 0,
+                "doubles": safe_int(row["doubles"]) or 0,
+                "triples": safe_int(row["triples"]) or 0,
+                "home_runs": safe_int(row["home_runs"]) or 0,
+                "walks": safe_int(row["walks"]) or 0,
+                "strikeouts": safe_int(row["strikeouts"]) or 0,
+                "runs_batted_in": safe_int(row["runs_batted_in"]) or 0,
+                "avg": metrics.get("avg"),
+                "obp": metrics.get("obp"),
+                "slg": metrics.get("slg"),
+                "ops": metrics.get("ops"),
+                "xBA": metrics.get("xba"),
+                "xwOBA": metrics.get("xwoba"),
+                "xSLG": metrics.get("xslg"),
+                "hard_hit_rate": metrics.get("hard_hit_rate"),
+                "barrel_rate": metrics.get("barrel_rate"),
+                "avg_exit_velocity": metrics.get("avg_exit_velocity"),
+                "max_exit_velocity": metrics.get("max_exit_velocity"),
+                "avg_bat_speed": metrics.get("avg_bat_speed"),
+                "max_bat_speed": metrics.get("max_bat_speed"),
+            }
+        )
+    return rank_rows(candidates, query)
+
+
+def fetch_statcast_batter_summary_rows(connection, query: SeasonMetricQuery):
     if not table_exists(connection, "statcast_batter_games"):
         return []
     parameters: list[Any] = [query.start_season, query.end_season]
@@ -1000,51 +1053,59 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
         """,
         tuple(parameters),
     ).fetchall()
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        metrics = statcast_batter_metric_values(row)
-        if not passes_sample_threshold(query.metric, metrics):
-            continue
-        metric_value = metrics.get(query.metric.key)
-        if metric_value is None:
-            continue
-        scope_start, scope_end, scope_text = row_scope(row)
-        candidates.append(
-            {
-                "season": scope_end,
-                "scope_label": scope_text,
-                "scope_start_season": scope_start,
-                "scope_end_season": scope_end,
-                "player_name": str(row["player_name"] or ""),
-                "team": str(row["team"] or ""),
-                "metric_value": float(metric_value),
-                "sample_size": float(metrics.get(query.metric.sample_basis or "plate_appearances") or 0),
-                "plate_appearances": safe_int(row["plate_appearances"]) or 0,
-                "at_bats": safe_int(row["at_bats"]) or 0,
-                "hits": safe_int(row["hits"]) or 0,
-                "singles": safe_int(row["singles"]) or 0,
-                "doubles": safe_int(row["doubles"]) or 0,
-                "triples": safe_int(row["triples"]) or 0,
-                "home_runs": safe_int(row["home_runs"]) or 0,
-                "walks": safe_int(row["walks"]) or 0,
-                "strikeouts": safe_int(row["strikeouts"]) or 0,
-                "runs_batted_in": safe_int(row["runs_batted_in"]) or 0,
-                "avg": metrics.get("avg"),
-                "obp": metrics.get("obp"),
-                "slg": metrics.get("slg"),
-                "ops": metrics.get("ops"),
-                "xBA": metrics.get("xba"),
-                "xwOBA": metrics.get("xwoba"),
-                "xSLG": metrics.get("xslg"),
-                "hard_hit_rate": metrics.get("hard_hit_rate"),
-                "barrel_rate": metrics.get("barrel_rate"),
-                "avg_exit_velocity": metrics.get("avg_exit_velocity"),
-                "max_exit_velocity": metrics.get("max_exit_velocity"),
-                "avg_bat_speed": metrics.get("avg_bat_speed"),
-                "max_bat_speed": metrics.get("max_bat_speed"),
-            }
-        )
-    return rank_rows(candidates, query)
+
+
+def fetch_statcast_batter_event_rows(connection, query: SeasonMetricQuery):
+    if not table_exists(connection, "statcast_events"):
+        return []
+    parameters: list[Any] = [query.start_season, query.end_season]
+    team_filter_sql = ""
+    if query.team_filter_code:
+        team_filter_sql = "AND upper(batting_team) = ?"
+        parameters.append(query.team_filter_code.upper())
+    season_select = (
+        "MIN(season) AS start_season, MAX(season) AS end_season,"
+        if query.aggregate_range
+        else "season,"
+    )
+    season_group = "batter_id" if query.aggregate_range else "season, batter_id"
+    return connection.execute(
+        f"""
+        SELECT
+            {season_select}
+            batter_id,
+            MIN(batter_name) AS player_name,
+            CASE WHEN COUNT(DISTINCT upper(batting_team)) = 1 THEN MIN(upper(batting_team)) ELSE 'MULTI' END AS team,
+            COUNT(*) AS plate_appearances,
+            SUM(is_ab) AS at_bats,
+            SUM(is_hit) AS hits,
+            SUM(CASE WHEN event = 'single' THEN 1 ELSE 0 END) AS singles,
+            SUM(CASE WHEN event = 'double' THEN 1 ELSE 0 END) AS doubles,
+            SUM(CASE WHEN event = 'triple' THEN 1 ELSE 0 END) AS triples,
+            SUM(CASE WHEN event = 'home_run' THEN 1 ELSE 0 END) AS home_runs,
+            SUM(CASE WHEN event IN ('walk', 'intent_walk') THEN 1 ELSE 0 END) AS walks,
+            SUM(is_strikeout) AS strikeouts,
+            SUM(runs_batted_in) AS runs_batted_in,
+            SUM(CASE WHEN launch_speed IS NOT NULL THEN 1 ELSE 0 END) AS batted_ball_events,
+            SUM(COALESCE(estimated_ba, 0.0)) AS xba_numerator,
+            SUM(COALESCE(estimated_woba, 0.0)) AS xwoba_numerator,
+            SUM(CASE WHEN estimated_woba IS NOT NULL THEN 1 ELSE 0 END) AS xwoba_denom,
+            SUM(COALESCE(estimated_slg, 0.0)) AS xslg_numerator,
+            SUM(CASE WHEN launch_speed >= 95 THEN 1 ELSE 0 END) AS hard_hit_bbe,
+            SUM(CASE WHEN launch_speed IS NOT NULL AND launch_angle IS NOT NULL AND launch_speed >= 98 AND launch_angle BETWEEN 26 AND 30 THEN 1 ELSE 0 END) AS barrel_bbe,
+            SUM(COALESCE(launch_speed, 0.0)) AS launch_speed_sum,
+            SUM(CASE WHEN launch_speed IS NOT NULL THEN 1 ELSE 0 END) AS launch_speed_count,
+            MAX(launch_speed) AS max_launch_speed,
+            AVG(bat_speed) AS avg_bat_speed,
+            MAX(bat_speed) AS max_bat_speed
+        FROM statcast_events
+        WHERE season BETWEEN ? AND ?
+          AND event <> ''
+          {team_filter_sql}
+        GROUP BY {season_group}
+        """,
+        tuple(parameters),
+    ).fetchall()
 
 
 def fetch_statcast_team_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:

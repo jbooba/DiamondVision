@@ -115,6 +115,16 @@ LEADING_QUESTION_WORDS = {
     "Evaluate",
     "Break",
 }
+LOWERCASE_NAME_LEADIN_PATTERNS = (
+    re.compile(
+        r"\bwho\s+(?:is|was)\s+(?!the\b|a\b|an\b)([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\btell\s+me\s+about\s+(?!the\b|a\b|an\b)([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})\b",
+        re.IGNORECASE,
+    ),
+)
 CURRENT_SCOPE_HINTS = {
     "today",
     "tonight",
@@ -371,6 +381,13 @@ def extract_name_candidates(question: str) -> list[str]:
         candidate = normalize_name_candidate(match)
         if candidate and candidate not in unique:
             unique.append(candidate)
+    if unique:
+        return unique
+    for pattern in LOWERCASE_NAME_LEADIN_PATTERNS:
+        for match in pattern.finditer(question):
+            candidate = normalize_name_candidate(match.group(1).title())
+            if candidate and candidate not in unique:
+                unique.append(candidate)
     return unique
 
 

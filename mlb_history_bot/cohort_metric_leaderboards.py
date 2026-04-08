@@ -175,7 +175,14 @@ def find_metric_by_key(metric_key: str, *, role: str) -> SeasonMetricSpec | None
     return None
 
 
-def build_where_clauses(query: CohortMetricQuery, *, season_column: str, team_column: str, player_column: str) -> tuple[str, tuple[Any, ...]]:
+def build_where_clauses(
+    query: CohortMetricQuery,
+    *,
+    season_column: str,
+    team_column: str,
+    player_column: str,
+    player_name_expr: str,
+) -> tuple[str, tuple[Any, ...]]:
     clauses = ["1=1"]
     parameters: list[Any] = []
     if query.cohort.kind == "manager_era":
@@ -190,6 +197,10 @@ def build_where_clauses(query: CohortMetricQuery, *, season_column: str, team_co
         placeholders = ", ".join("?" for _ in query.cohort.player_ids)
         clauses.append(f"{player_column} IN ({placeholders})")
         parameters.extend(sorted(query.cohort.player_ids))
+    elif query.cohort.player_names:
+        placeholders = ", ".join("?" for _ in query.cohort.player_names)
+        clauses.append(f"lower(trim({player_name_expr})) IN ({placeholders})")
+        parameters.extend(sorted(query.cohort.player_names))
     if query.start_season is not None:
         clauses.append(f"CAST({season_column} AS INTEGER) >= ?")
         parameters.append(query.start_season)
@@ -207,6 +218,7 @@ def fetch_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, A
         season_column="b.yearid",
         team_column="b.teamid",
         player_column="b.playerid",
+        player_name_expr="coalesce(p.namefirst, '') || ' ' || coalesce(p.namelast, '')",
     )
     rows = connection.execute(
         f"""
@@ -313,55 +325,9 @@ def fetch_statcast_rows(connection, query: CohortMetricQuery) -> list[dict[str, 
 
 
 def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
-    if not table_exists(connection, "statcast_batter_games"):
-        return []
-    identity_sql, identity_params = build_statcast_identity_filter(query.cohort)
-    if identity_sql is None:
-        return []
-    clauses = [identity_sql]
-    parameters: list[Any] = list(identity_params)
-    if query.start_season is not None:
-        clauses.append("season >= ?")
-        parameters.append(query.start_season)
-    if query.end_season is not None:
-        clauses.append("season <= ?")
-        parameters.append(query.end_season)
-    rows = connection.execute(
-        f"""
-        SELECT
-            batter_id,
-            MIN(batter_name) AS player_name,
-            MIN(season) AS first_season,
-            MAX(season) AS last_season,
-            CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
-            SUM(plate_appearances) AS plate_appearances,
-            SUM(at_bats) AS at_bats,
-            SUM(hits) AS hits,
-            SUM(singles) AS singles,
-            SUM(doubles) AS doubles,
-            SUM(triples) AS triples,
-            SUM(home_runs) AS home_runs,
-            SUM(walks) AS walks,
-            SUM(strikeouts) AS strikeouts,
-            SUM(runs_batted_in) AS runs_batted_in,
-            SUM(batted_ball_events) AS batted_ball_events,
-            SUM(xba_numerator) AS xba_numerator,
-            SUM(xwoba_numerator) AS xwoba_numerator,
-            SUM(xwoba_denom) AS xwoba_denom,
-            SUM(xslg_numerator) AS xslg_numerator,
-            SUM(hard_hit_bbe) AS hard_hit_bbe,
-            SUM(barrel_bbe) AS barrel_bbe,
-            SUM(launch_speed_sum) AS launch_speed_sum,
-            SUM(launch_speed_count) AS launch_speed_count,
-            MAX(max_launch_speed) AS max_launch_speed,
-            AVG(avg_bat_speed) AS avg_bat_speed,
-            MAX(max_bat_speed) AS max_bat_speed
-        FROM statcast_batter_games
-        WHERE {' AND '.join(clauses)}
-        GROUP BY batter_id
-        """,
-        tuple(parameters),
-    ).fetchall()
+    rows = fetch_statcast_hitting_summary_rows(connection, query)
+    if not rows:
+        rows = fetch_statcast_hitting_rows_from_events(connection, query)
     candidates: list[dict[str, Any]] = []
     for row in rows:
         metrics = statcast_batter_metric_values(row)
@@ -405,6 +371,110 @@ def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[di
     return rank_rows(candidates, query)
 
 
+def fetch_statcast_hitting_summary_rows(connection, query: CohortMetricQuery):
+    if not table_exists(connection, "statcast_batter_games"):
+        return []
+    identity_sql, identity_params = build_statcast_identity_filter(query.cohort)
+    if identity_sql is None:
+        return []
+    clauses = [identity_sql]
+    parameters: list[Any] = list(identity_params)
+    if query.start_season is not None:
+        clauses.append("season >= ?")
+        parameters.append(query.start_season)
+    if query.end_season is not None:
+        clauses.append("season <= ?")
+        parameters.append(query.end_season)
+    return connection.execute(
+        f"""
+        SELECT
+            batter_id,
+            MIN(batter_name) AS player_name,
+            MIN(season) AS first_season,
+            MAX(season) AS last_season,
+            CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
+            SUM(plate_appearances) AS plate_appearances,
+            SUM(at_bats) AS at_bats,
+            SUM(hits) AS hits,
+            SUM(singles) AS singles,
+            SUM(doubles) AS doubles,
+            SUM(triples) AS triples,
+            SUM(home_runs) AS home_runs,
+            SUM(walks) AS walks,
+            SUM(strikeouts) AS strikeouts,
+            SUM(runs_batted_in) AS runs_batted_in,
+            SUM(batted_ball_events) AS batted_ball_events,
+            SUM(xba_numerator) AS xba_numerator,
+            SUM(xwoba_numerator) AS xwoba_numerator,
+            SUM(xwoba_denom) AS xwoba_denom,
+            SUM(xslg_numerator) AS xslg_numerator,
+            SUM(hard_hit_bbe) AS hard_hit_bbe,
+            SUM(barrel_bbe) AS barrel_bbe,
+            SUM(launch_speed_sum) AS launch_speed_sum,
+            SUM(launch_speed_count) AS launch_speed_count,
+            MAX(max_launch_speed) AS max_launch_speed,
+            AVG(avg_bat_speed) AS avg_bat_speed,
+            MAX(max_bat_speed) AS max_bat_speed
+        FROM statcast_batter_games
+        WHERE {' AND '.join(clauses)}
+        GROUP BY batter_id
+        """,
+        tuple(parameters),
+    ).fetchall()
+
+
+def fetch_statcast_hitting_rows_from_events(connection, query: CohortMetricQuery):
+    if not table_exists(connection, "statcast_events"):
+        return []
+    identity_sql, identity_params = build_statcast_event_identity_filter(query.cohort)
+    if identity_sql is None:
+        return []
+    clauses = [identity_sql, "event <> ''"]
+    parameters: list[Any] = list(identity_params)
+    if query.start_season is not None:
+        clauses.append("season >= ?")
+        parameters.append(query.start_season)
+    if query.end_season is not None:
+        clauses.append("season <= ?")
+        parameters.append(query.end_season)
+    return connection.execute(
+        f"""
+        SELECT
+            batter_id,
+            MIN(batter_name) AS player_name,
+            MIN(season) AS first_season,
+            MAX(season) AS last_season,
+            CASE WHEN COUNT(DISTINCT upper(batting_team)) = 1 THEN MIN(upper(batting_team)) ELSE 'MULTI' END AS team,
+            COUNT(*) AS plate_appearances,
+            SUM(is_ab) AS at_bats,
+            SUM(is_hit) AS hits,
+            SUM(CASE WHEN event = 'single' THEN 1 ELSE 0 END) AS singles,
+            SUM(CASE WHEN event = 'double' THEN 1 ELSE 0 END) AS doubles,
+            SUM(CASE WHEN event = 'triple' THEN 1 ELSE 0 END) AS triples,
+            SUM(CASE WHEN event = 'home_run' THEN 1 ELSE 0 END) AS home_runs,
+            SUM(CASE WHEN event IN ('walk', 'intent_walk') THEN 1 ELSE 0 END) AS walks,
+            SUM(is_strikeout) AS strikeouts,
+            SUM(runs_batted_in) AS runs_batted_in,
+            SUM(CASE WHEN launch_speed IS NOT NULL THEN 1 ELSE 0 END) AS batted_ball_events,
+            SUM(COALESCE(estimated_ba, 0.0)) AS xba_numerator,
+            SUM(COALESCE(estimated_woba, 0.0)) AS xwoba_numerator,
+            SUM(CASE WHEN estimated_woba IS NOT NULL THEN 1 ELSE 0 END) AS xwoba_denom,
+            SUM(COALESCE(estimated_slg, 0.0)) AS xslg_numerator,
+            SUM(CASE WHEN launch_speed >= 95 THEN 1 ELSE 0 END) AS hard_hit_bbe,
+            SUM(CASE WHEN launch_speed IS NOT NULL AND launch_angle IS NOT NULL AND launch_speed >= 98 AND launch_angle BETWEEN 26 AND 30 THEN 1 ELSE 0 END) AS barrel_bbe,
+            SUM(COALESCE(launch_speed, 0.0)) AS launch_speed_sum,
+            SUM(CASE WHEN launch_speed IS NOT NULL THEN 1 ELSE 0 END) AS launch_speed_count,
+            MAX(launch_speed) AS max_launch_speed,
+            AVG(bat_speed) AS avg_bat_speed,
+            MAX(bat_speed) AS max_bat_speed
+        FROM statcast_events
+        WHERE {' AND '.join(clauses)}
+        GROUP BY batter_id
+        """,
+        tuple(parameters),
+    ).fetchall()
+
+
 def build_statcast_identity_filter(cohort: ResolvedCohort) -> tuple[str | None, tuple[Any, ...]]:
     clauses: list[str] = []
     parameters: list[Any] = []
@@ -425,6 +495,22 @@ def build_statcast_identity_filter(cohort: ResolvedCohort) -> tuple[str | None, 
     return "(" + " OR ".join(clauses) + ")", tuple(parameters)
 
 
+def build_statcast_event_identity_filter(cohort: ResolvedCohort) -> tuple[str | None, tuple[Any, ...]]:
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    if cohort.kind == "manager_era" and cohort.team_code:
+        clauses.append("upper(batting_team) = ?")
+        parameters.append(str(cohort.team_code).strip().upper())
+    player_names = sorted({name.strip().lower() for name in (cohort.player_names or set()) if str(name).strip()})
+    if player_names:
+        placeholders = ", ".join("?" for _ in player_names)
+        clauses.append(f"lower(trim(batter_name)) IN ({placeholders})")
+        parameters.extend(player_names)
+    if not clauses:
+        return None, tuple()
+    return "(" + " OR ".join(clauses) + ")", tuple(parameters)
+
+
 def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
     if not (table_exists(connection, "lahman_pitching") and table_exists(connection, "lahman_people")):
         return []
@@ -433,6 +519,7 @@ def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, 
         season_column="pch.yearid",
         team_column="pch.teamid",
         player_column="pch.playerid",
+        player_name_expr="coalesce(ppl.namefirst, '') || ' ' || coalesce(ppl.namelast, '')",
     )
     rows = connection.execute(
         f"""
@@ -521,6 +608,7 @@ def fetch_fielding_rows(connection, query: CohortMetricQuery) -> list[dict[str, 
         season_column="fld.yearid",
         team_column="fld.teamid",
         player_column="fld.playerid",
+        player_name_expr="coalesce(ppl.namefirst, '') || ' ' || coalesce(ppl.namelast, '')",
     )
     rows = connection.execute(
         f"""

@@ -689,6 +689,17 @@ def load_all_star_game_logs() -> list[dict[str, Any]]:
     return _frame_to_records(frame)
 
 
+@lru_cache(maxsize=2)
+def load_all_star_full() -> list[dict[str, Any]]:
+    try:
+        from pybaseball import all_star_full
+
+        frame = all_star_full()
+    except Exception:
+        return []
+    return _frame_to_records(frame)
+
+
 @lru_cache(maxsize=4)
 def load_wild_card_logs() -> list[dict[str, Any]]:
     try:

@@ -27,6 +27,11 @@ def test_extract_name_candidates() -> None:
     assert "Mike Trout" in names
 
 
+def test_extract_name_candidates_from_lowercase_profile_prompt() -> None:
+    names = extract_name_candidates("who is nathan church")
+    assert names == ["Nathan Church"]
+
+
 def test_extract_year() -> None:
     assert extract_year("Who led the AL in 1957?") == 1957
 

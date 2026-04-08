@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 from mlb_history_bot.cohort_metric_leaderboards import CohortMetricLeaderboardResearcher
 from mlb_history_bot.config import Settings
@@ -245,4 +246,138 @@ def test_switch_hitter_statcast_cohort_resolves_by_average_exit_velocity() -> No
     assert snippet.payload["source_family"] == "statcast"
     assert snippet.payload["cohort_kind"] == "bat_handedness"
     assert snippet.payload["rows"][0]["player_name"] == "Jose Ramirez"
+    con.close()
+
+
+def test_switch_hitter_statcast_cohort_falls_back_to_statcast_events() -> None:
+    con = build_test_connection()
+    con.execute("DELETE FROM statcast_batter_games")
+    jose_rows = [
+        (
+            2021,
+            "2021-07-01",
+            100,
+            at_bat_number,
+            3,
+            608070,
+            "Jose Ramirez",
+            1,
+            "Pitcher A",
+            "CLE",
+            "DET",
+            "CLE",
+            "DET",
+            "S",
+            "R",
+            "FF",
+            "4-Seam Fastball",
+            "fastball",
+            "single" if at_bat_number % 2 else "home_run",
+            1,
+            1,
+            1 if at_bat_number % 2 == 0 else 0,
+            1 if at_bat_number % 2 == 0 else 0,
+            0,
+            at_bat_number % 3,
+            1,
+            1,
+            "1-1",
+            1,
+            1 if at_bat_number % 2 == 0 else 0,
+            "middle",
+            "middle",
+            "center",
+            95.0,
+            2300.0,
+            108.0 + (at_bat_number % 2),
+            18.0,
+            402.0,
+            74.0,
+            0.88,
+            0.91,
+            1.20,
+        )
+        for at_bat_number in range(1, 11)
+    ]
+    soto_rows = [
+        (
+            2021,
+            "2021-07-02",
+            101,
+            at_bat_number,
+            2,
+            665742,
+            "Juan Soto",
+            2,
+            "Pitcher B",
+            "WSN",
+            "ATL",
+            "WSN",
+            "ATL",
+            "L",
+            "R",
+            "FF",
+            "4-Seam Fastball",
+            "fastball",
+            "single",
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            "0-1",
+            0,
+            0,
+            "middle",
+            "middle",
+            "center",
+            94.1,
+            2250.0,
+            101.0,
+            14.0,
+            370.0,
+            72.0,
+            0.80,
+            0.82,
+            1.05,
+        )
+        for at_bat_number in range(1, 11)
+    ]
+    con.executemany(
+        """
+        INSERT INTO statcast_events(
+            season, game_date, game_pk, at_bat_number, pitch_number, batter_id, batter_name, pitcher_id, pitcher_name,
+            batting_team, pitching_team, home_team, away_team, stand, p_throws, pitch_type, pitch_name, pitch_family,
+            event, is_ab, is_hit, is_xbh, is_home_run, is_strikeout, has_risp, balls, strikes, count_key,
+            outs_when_up, runs_batted_in, horizontal_location, vertical_location, field_direction, release_speed,
+            release_spin_rate, launch_speed, launch_angle, hit_distance, bat_speed, estimated_ba, estimated_woba,
+            estimated_slg
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        jose_rows + soto_rows,
+    )
+    con.commit()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "highest average exit velocity by a switch hitter in 2021")
+    assert snippet is not None
+    assert snippet.payload["rows"][0]["player_name"] == "Jose Ramirez"
+    con.close()
+
+
+def test_all_star_cohort_uses_dynamic_player_set_for_career_queries() -> None:
+    con = build_test_connection()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    with patch("mlb_history_bot.cohort_timeline.load_all_star_full", return_value=[]), patch(
+        "mlb_history_bot.cohort_timeline.load_all_star_game_logs",
+        return_value=[
+            {"home_1_name": "Pete Alonso", "visiting_1_name": "Jose Ramirez", "home_manager_name": "Buck Showalter"},
+        ],
+    ):
+        snippet = researcher.build_snippet(con, "what is the lowest career BA of a player who made an all star team")
+    assert snippet is not None
+    assert snippet.payload["cohort_kind"] == "all_star"
+    assert snippet.payload["rows"][0]["player_name"] == "Pete Alonso"
     con.close()
