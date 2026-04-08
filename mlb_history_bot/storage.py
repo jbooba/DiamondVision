@@ -322,6 +322,11 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             is_home_run INTEGER NOT NULL DEFAULT 0,
             is_strikeout INTEGER NOT NULL DEFAULT 0,
             has_risp INTEGER NOT NULL DEFAULT 0,
+            balls INTEGER NOT NULL DEFAULT 0,
+            strikes INTEGER NOT NULL DEFAULT 0,
+            count_key TEXT NOT NULL DEFAULT '',
+            outs_when_up INTEGER NOT NULL DEFAULT 0,
+            runs_batted_in INTEGER NOT NULL DEFAULT 0,
             horizontal_location TEXT NOT NULL DEFAULT '',
             vertical_location TEXT NOT NULL DEFAULT '',
             field_direction TEXT NOT NULL DEFAULT '',
@@ -422,6 +427,17 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_table_columns(
+        connection,
+        "statcast_events",
+        {
+            "balls": "INTEGER NOT NULL DEFAULT 0",
+            "strikes": "INTEGER NOT NULL DEFAULT 0",
+            "count_key": "TEXT NOT NULL DEFAULT ''",
+            "outs_when_up": "INTEGER NOT NULL DEFAULT 0",
+            "runs_batted_in": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
     connection.executescript(
         """
         CREATE INDEX IF NOT EXISTS idx_fielding_bible_player_drs_lookup
@@ -486,6 +502,9 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_statcast_events_filters
         ON statcast_events (pitch_family, event, horizontal_location, vertical_location, field_direction, home_team, season);
+
+        CREATE INDEX IF NOT EXISTS idx_statcast_events_count_filters
+        ON statcast_events (count_key, event, season, game_date);
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_team_split_games_lookup
         ON retrosheet_team_split_games (split_key, season, game_date, team);
@@ -594,6 +613,20 @@ def list_table_columns(connection: sqlite3.Connection, table_name: str) -> list[
         return []
     rows = connection.execute(f"PRAGMA table_info({quote_identifier(table_name)})").fetchall()
     return [str(row["name"]) for row in rows]
+
+
+def _ensure_table_columns(
+    connection: sqlite3.Connection,
+    table_name: str,
+    columns: dict[str, str],
+) -> None:
+    existing = {column.lower() for column in list_table_columns(connection, table_name)}
+    for name, column_sql in columns.items():
+        if name.lower() in existing:
+            continue
+        connection.execute(
+            f"ALTER TABLE {quote_identifier(table_name)} ADD COLUMN {quote_identifier(name)} {column_sql}"
+        )
 
 
 def resolve_column(connection: sqlite3.Connection, table_name: str, candidates: Iterable[str]) -> str | None:
@@ -1303,6 +1336,11 @@ def replace_statcast_events(
             _coerce_int(row.get("is_home_run")),
             _coerce_int(row.get("is_strikeout")),
             _coerce_int(row.get("has_risp")),
+            _coerce_int(row.get("balls")),
+            _coerce_int(row.get("strikes")),
+            str(row.get("count_key") or "").strip(),
+            _coerce_int(row.get("outs_when_up")),
+            _coerce_int(row.get("runs_batted_in")),
             str(row.get("horizontal_location") or "").strip(),
             str(row.get("vertical_location") or "").strip(),
             str(row.get("field_direction") or "").strip(),
@@ -1358,6 +1396,11 @@ def replace_statcast_events(
                 is_home_run,
                 is_strikeout,
                 has_risp,
+                balls,
+                strikes,
+                count_key,
+                outs_when_up,
+                runs_batted_in,
                 horizontal_location,
                 vertical_location,
                 field_direction,
@@ -1370,7 +1413,7 @@ def replace_statcast_events(
                 estimated_ba,
                 estimated_woba,
                 estimated_slg
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized_rows,
         )

@@ -9,11 +9,11 @@ from typing import Any
 from .config import Settings
 from .metrics import MetricCatalog
 from .models import EvidenceSnippet
-from .query_intent import detect_ranking_intent, mentions_current_scope
 from .pybaseball_adapter import load_statcast_range
+from .query_intent import detect_ranking_intent, mentions_current_scope
 from .query_utils import extract_date_window, extract_referenced_season, question_mentions_explicit_year
-from .storage import table_exists
 from .statcast_sync import TEAM_NAMES, iter_sync_chunks, resolve_statcast_sync_windows
+from .storage import table_exists
 
 
 RISP_HINTS = (
@@ -96,7 +96,7 @@ class StatcastEventResearcher:
                     citation="Lahman team park history plus Statcast event planner",
                     summary=(
                         f"I understand this as a Statcast event leaderboard filtered to {query.park_phrase}, "
-                        "but that park name did not resolve cleanly to a tracked home team filter. "
+                        "but that park name did not resolve cleanly to a tracked home-team filter. "
                         "The leaderboard planner should not answer a park-filtered question without matching the park first."
                     ),
                     payload={

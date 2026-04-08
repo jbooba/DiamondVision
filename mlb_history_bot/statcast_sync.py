@@ -430,6 +430,12 @@ def prepare_statcast_pitch_rows(frame):
         pd.to_numeric(column_or_default(pitches, "on_2b"), errors="coerce").fillna(0).ne(0)
         | pd.to_numeric(column_or_default(pitches, "on_3b"), errors="coerce").fillna(0).ne(0)
     ).astype(int)
+    balls = pd.to_numeric(column_or_default(pitches, "balls"), errors="coerce").fillna(0)
+    strikes = pd.to_numeric(column_or_default(pitches, "strikes"), errors="coerce").fillna(0)
+    pitches["balls_num"] = balls.astype("Int64")
+    pitches["strikes_num"] = strikes.astype("Int64")
+    pitches["count_key"] = pitches["balls_num"].astype(str) + "-" + pitches["strikes_num"].astype(str)
+    pitches["outs_when_up_num"] = pd.to_numeric(column_or_default(pitches, "outs_when_up"), errors="coerce").fillna(0).astype("Int64")
     plate_x = pd.to_numeric(column_or_default(pitches, "plate_x"), errors="coerce")
     plate_z = pd.to_numeric(column_or_default(pitches, "plate_z"), errors="coerce")
     sz_top = pd.to_numeric(column_or_default(pitches, "sz_top"), errors="coerce")
@@ -854,13 +860,18 @@ def aggregate_statcast_events(frame) -> list[dict[str, Any]]:
                 "event": row.get("event_name") or "",
                 "is_ab": row.get("is_ab") or 0,
                 "is_hit": row.get("is_hit") or 0,
-                "is_xbh": row.get("is_xbh") or 0,
-                "is_home_run": row.get("is_home_run") or 0,
-                "is_strikeout": row.get("is_strikeout") or 0,
-                "has_risp": row.get("has_risp") or 0,
-                "horizontal_location": row.get("horizontal_location") or "",
-                "vertical_location": row.get("vertical_location") or "",
-                "field_direction": row.get("field_direction") or "",
+                  "is_xbh": row.get("is_xbh") or 0,
+                  "is_home_run": row.get("is_home_run") or 0,
+                  "is_strikeout": row.get("is_strikeout") or 0,
+                  "has_risp": row.get("has_risp") or 0,
+                  "balls": row.get("balls_num") or 0,
+                  "strikes": row.get("strikes_num") or 0,
+                  "count_key": row.get("count_key") or "",
+                  "outs_when_up": row.get("outs_when_up_num") or 0,
+                  "runs_batted_in": int(round(float(row.get("rbi_num") or 0.0))),
+                  "horizontal_location": row.get("horizontal_location") or "",
+                  "vertical_location": row.get("vertical_location") or "",
+                  "field_direction": row.get("field_direction") or "",
                 "release_speed": row.get("release_speed_num"),
                 "release_spin_rate": row.get("release_spin_rate_num"),
                 "launch_speed": row.get("launch_speed_num"),

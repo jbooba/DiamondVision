@@ -176,6 +176,18 @@ The goal is a grammar of baseball relationships, not a bag of prompt templates.
 
 ## Major Remaining Expansion Targets
 
+- generalized cohort joins and entity-set joins
+  - award winners, nationality cohorts, manager eras, former/future teams,
+    opponent birthdays, transaction windows
+- generalized set refinement
+  - follow-ups like `remove the .000 hitters`, `only among starters`,
+    `minimum 10 HR`, `exclude current team`
+- generalized season/career metric warehouse
+  - one grammar for highest/lowest by player/team for historical Lahman,
+    synced Statcast summaries, and provider-backed advanced season metrics
+- generalized event-set leaderboards
+  - one grammar for event-type + metric + park + direction + pitch family +
+    count + date-window combinations
 - broader base-out / score-state / leverage-context splits
 - handedness and platoon relationships
 - weather / rain-delay / resumed-game relationships

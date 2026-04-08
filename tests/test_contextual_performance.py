@@ -269,3 +269,12 @@ def test_team_relationship_query_for_rbi() -> None:
     assert query is not None
     assert query.metric_key == "runs_batted_in"
     assert query.sort_desc is True
+
+
+def test_team_relationship_query_supports_aggregate_scope() -> None:
+    query = parse_team_relationship_query(
+        "Who has the lowest batting average aggregated across all former teams?"
+    )
+    assert query is not None
+    assert query.metric_key == "ba"
+    assert query.aggregate_scope == "player"

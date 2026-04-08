@@ -188,6 +188,138 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 leaders,
             )
 
+    if analysis_type == "season_metric_leaderboard":
+        rows = payload.get("rows")
+        metric_label = str(payload.get("metric") or "Metric")
+        entity_scope = str(payload.get("entity_scope") or "player")
+        role = str(payload.get("role") or "")
+        source_family = str(payload.get("source_family") or "")
+        if isinstance(rows, list):
+            columns = [{"key": "rank", "label": "#", "align": "right"}, {"key": "season", "label": "Season", "align": "right"}]
+            if entity_scope == "team":
+                columns.extend(
+                    [
+                        {"key": "team_name", "label": "Team", "align": "left"},
+                        {"key": "metric_value", "label": metric_label, "align": "right"},
+                        {"key": "games", "label": "G", "align": "right"},
+                    ]
+                )
+                if source_family == "statcast":
+                    columns.extend(
+                        [
+                            {"key": "xBA", "label": "xBA", "align": "right"},
+                            {"key": "xwOBA", "label": "xwOBA", "align": "right"},
+                            {"key": "xSLG", "label": "xSLG", "align": "right"},
+                            {"key": "hard_hit_rate", "label": "HardHit", "align": "right"},
+                            {"key": "barrel_rate", "label": "Barrel", "align": "right"},
+                            {"key": "avg_exit_velocity", "label": "Avg EV", "align": "right"},
+                        ]
+                    )
+                else:
+                    columns.extend(
+                        [
+                            {"key": "wins", "label": "W", "align": "right"},
+                            {"key": "losses", "label": "L", "align": "right"},
+                            {"key": "win_pct", "label": "Win%", "align": "right"},
+                            {"key": "runs", "label": "R", "align": "right"},
+                            {"key": "runs_allowed", "label": "RA", "align": "right"},
+                            {"key": "avg", "label": "AVG", "align": "right"},
+                            {"key": "obp", "label": "OBP", "align": "right"},
+                            {"key": "slg", "label": "SLG", "align": "right"},
+                            {"key": "ops", "label": "OPS", "align": "right"},
+                        ]
+                    )
+                return build_table_display(columns, rows)
+
+            columns.extend(
+                [
+                    {"key": "player_name", "label": "Player", "align": "left"},
+                    {"key": "team", "label": "Team", "align": "left"},
+                    {"key": "metric_value", "label": metric_label, "align": "right"},
+                    {"key": "games", "label": "G", "align": "right"},
+                ]
+            )
+            if source_family == "provider":
+                columns.extend(
+                    [
+                        {"key": "group", "label": "Group", "align": "left"},
+                        {"key": "starts", "label": "GS", "align": "right"},
+                    ]
+                )
+            elif source_family == "statcast":
+                columns.extend(
+                    [
+                        {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "at_bats", "label": "AB", "align": "right"},
+                        {"key": "hits", "label": "H", "align": "right"},
+                        {"key": "singles", "label": "1B", "align": "right"},
+                        {"key": "doubles", "label": "2B", "align": "right"},
+                        {"key": "triples", "label": "3B", "align": "right"},
+                        {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                        {"key": "avg", "label": "AVG", "align": "right"},
+                        {"key": "obp", "label": "OBP", "align": "right"},
+                        {"key": "slg", "label": "SLG", "align": "right"},
+                        {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                        {"key": "xBA", "label": "xBA", "align": "right"},
+                        {"key": "xwOBA", "label": "xwOBA", "align": "right"},
+                        {"key": "xSLG", "label": "xSLG", "align": "right"},
+                        {"key": "hard_hit_rate", "label": "HardHit", "align": "right"},
+                        {"key": "barrel_rate", "label": "Barrel", "align": "right"},
+                        {"key": "avg_exit_velocity", "label": "Avg EV", "align": "right"},
+                        {"key": "avg_bat_speed", "label": "Avg Bat", "align": "right"},
+                    ]
+                )
+            elif role == "pitcher":
+                columns.extend(
+                    [
+                        {"key": "innings", "label": "IP", "align": "right"},
+                        {"key": "games_started", "label": "GS", "align": "right"},
+                        {"key": "era", "label": "ERA", "align": "right"},
+                        {"key": "whip", "label": "WHIP", "align": "right"},
+                        {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "losses", "label": "L", "align": "right"},
+                        {"key": "saves", "label": "SV", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                    ]
+                )
+            elif role == "fielder":
+                columns.extend(
+                    [
+                        {"key": "fielding_pct", "label": "Fld%", "align": "right"},
+                        {"key": "errors", "label": "E", "align": "right"},
+                        {"key": "assists", "label": "A", "align": "right"},
+                        {"key": "putouts", "label": "PO", "align": "right"},
+                        {"key": "double_plays", "label": "DP", "align": "right"},
+                    ]
+                )
+            else:
+                columns.extend(
+                    [
+                        {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "at_bats", "label": "AB", "align": "right"},
+                        {"key": "runs", "label": "R", "align": "right"},
+                        {"key": "avg", "label": "AVG", "align": "right"},
+                        {"key": "obp", "label": "OBP", "align": "right"},
+                        {"key": "slg", "label": "SLG", "align": "right"},
+                        {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "singles", "label": "1B", "align": "right"},
+                        {"key": "doubles", "label": "2B", "align": "right"},
+                        {"key": "triples", "label": "3B", "align": "right"},
+                        {"key": "total_bases", "label": "TB", "align": "right"},
+                        {"key": "extra_base_hits", "label": "XBH", "align": "right"},
+                        {"key": "hits", "label": "H", "align": "right"},
+                        {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                        {"key": "steals", "label": "SB", "align": "right"},
+                    ]
+                )
+            return build_table_display(columns, rows)
+
     if analysis_type == "pitch_arsenal_leaderboard":
         leaders = payload.get("leaders")
         metric_label = str(payload.get("metric") or "Metric")
@@ -331,19 +463,28 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
     if analysis_type == "player_team_context_leaderboard":
         leaders = payload.get("leaders")
         metric_label = str(payload.get("metric") or "Metric")
+        aggregate_scope = str(payload.get("aggregate_scope") or "opponent")
         if isinstance(leaders, list):
-            return build_table_display(
+            columns = [
+                {"key": "rank", "label": "#", "align": "right"},
+                {"key": "player_name", "label": "Player", "align": "left"},
+            ]
+            if aggregate_scope == "player":
+                columns.append({"key": "teams_matched", "label": "Teams", "align": "right"})
+            else:
+                columns.append({"key": "opponent_name", "label": "Opponent", "align": "left"})
+            columns.extend(
                 [
-                    {"key": "rank", "label": "#", "align": "right"},
-                    {"key": "player_name", "label": "Player", "align": "left"},
-                    {"key": "opponent_name", "label": "Opponent", "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
                     {"key": "plate_appearances", "label": "PA", "align": "right"},
                     {"key": "at_bats", "label": "AB", "align": "right"},
                     {"key": "hits", "label": "H", "align": "right"},
                     {"key": "home_runs", "label": "HR", "align": "right"},
                     {"key": "runs_batted_in", "label": "RBI", "align": "right"},
-                ],
+                ]
+            )
+            return build_table_display(
+                columns,
                 leaders,
             )
 

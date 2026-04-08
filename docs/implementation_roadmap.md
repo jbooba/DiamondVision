@@ -219,8 +219,35 @@ Non-goals:
 
 Current priority:
 
-- broaden current-team evaluation and roster-leader routing using shared
-  relationship grammar helpers
+- broaden season-aware leaderboard routing so historical Lahman data,
+  local Statcast summaries, and provider-backed advanced season metrics
+  can all answer through one shared highest/lowest grammar
+
+Implemented in this pass:
+
+- generalized season metric leaderboard layer for historical Lahman player/team
+  seasons
+- local Statcast season leaderboards for synced batter/team metrics
+- provider-backed season metric bridge for advanced stats such as
+  `FIP`, `xFIP`, `SIERA`, `wRC+`, and other Fangraphs season leaderboard metrics
+- source cascading so compatible questions can widen from historical -> Statcast
+  -> provider instead of dying on the first source-family miss
+- DB migration fix for new Statcast event columns on existing databases
+
+Tester-derived failure classes now tracked explicitly:
+
+- aggregate vs single-opponent relationships
+  - example shape: `across all former teams` vs `against one former team`
+- cohort joins
+  - example shape: `against Cy Young winners`, `on an opponent's birthday`
+- set refinement over a prior answer
+  - example shape: `eliminate anyone hitting .000 from the pool`
+- career/event aggregates with minimum qualifiers
+  - example shape: `lowest average home run distance with at least 10 HR`
+- event-set leaderboards with many orthogonal filters
+  - example shape: date + EV + event type + park + direction + pitch type + count
+- same metric grammar across historical, synced local modern, and provider-backed
+  season data
 
 Why this first:
 

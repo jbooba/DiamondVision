@@ -46,6 +46,20 @@ FUTURE_TEAM_HINTS = (
     "later joined",
     "were later signed to",
 )
+AGGREGATE_RELATIONSHIP_HINTS = (
+    "all former teams",
+    "across all former teams",
+    "aggregated across all former teams",
+    "combined across all former teams",
+    "across former teams",
+    "all future teams",
+    "across all future teams",
+    "aggregated across all future teams",
+    "combined across all future teams",
+    "across future teams",
+    "all teams they were previously on",
+    "all teams they later joined",
+)
 COUNT_PLAY_USECOLS = [
     "batter",
     "balls",
@@ -117,6 +131,7 @@ class TeamRelationshipQuery:
     sort_desc: bool
     min_sample_size: int
     sample_basis: str | None
+    aggregate_scope: str = "opponent"
 
 
 CONTEXT_METRIC_SPECS = (
@@ -615,6 +630,7 @@ def parse_team_relationship_query(question: str) -> TeamRelationshipQuery | None
         sort_desc=sort_desc,
         min_sample_size=metric_spec.min_sample_size,
         sample_basis=metric_spec.sample_basis,
+        aggregate_scope="player" if any(token in lowered for token in AGGREGATE_RELATIONSHIP_HINTS) else "opponent",
     )
 
 
@@ -638,62 +654,126 @@ def fetch_team_relationship_rows(connection, query: TeamRelationshipQuery) -> li
         qualification_clause = f"AND context.{query.sample_basis} >= ?"
         parameters.append(query.min_sample_size)
     order_direction = "DESC" if query.sort_desc else "ASC"
-    rows = connection.execute(
-        f"""
-        WITH player_names AS (
+    if query.aggregate_scope == "player":
+        rows = connection.execute(
+            f"""
+            WITH player_names AS (
+                SELECT
+                    playerid,
+                    NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
+                FROM lahman_people
+                WHERE COALESCE(playerid, '') <> ''
+            ),
+            opponent_counts AS (
+                SELECT
+                    player_id,
+                    COUNT(DISTINCT opponent) AS teams_matched,
+                    GROUP_CONCAT(DISTINCT opponent) AS opponent_codes,
+                    SUM(plate_appearances) AS plate_appearances,
+                    SUM(at_bats) AS at_bats,
+                    SUM(hits) AS hits,
+                    SUM(doubles) AS doubles,
+                    SUM(triples) AS triples,
+                    SUM(home_runs) AS home_runs,
+                    SUM(walks) AS walks,
+                    SUM(intentional_walks) AS intentional_walks,
+                    SUM(hit_by_pitch) AS hit_by_pitch,
+                    SUM(sacrifice_flies) AS sacrifice_flies,
+                    SUM(strikeouts) AS strikeouts,
+                    SUM(runs_batted_in) AS runs_batted_in,
+                    MIN(first_season) AS first_season,
+                    MAX(last_season) AS last_season
+                FROM retrosheet_player_opponent_contexts
+                WHERE context_key = ?
+                GROUP BY player_id
+            )
             SELECT
-                playerid,
-                NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
-            FROM lahman_people
-            WHERE COALESCE(playerid, '') <> ''
-        ),
-        opponent_names AS (
+                COALESCE(player_names.player_name, context.player_id) AS player_name,
+                context.teams_matched,
+                context.opponent_codes,
+                context.plate_appearances,
+                context.at_bats,
+                context.hits,
+                context.doubles,
+                context.triples,
+                context.home_runs,
+                context.walks,
+                context.intentional_walks,
+                context.hit_by_pitch,
+                context.sacrifice_flies,
+                context.strikeouts,
+                context.runs_batted_in,
+                context.first_season,
+                context.last_season,
+                {metric_expression.replace('context.', 'context.')} AS metric_value
+            FROM opponent_counts AS context
+            LEFT JOIN player_names
+              ON player_names.playerid = context.player_id
+            WHERE 1 = 1
+              {qualification_clause}
+              AND ({metric_expression.replace('context.', 'context.')}) IS NOT NULL
+            ORDER BY metric_value {order_direction}, context.plate_appearances DESC, player_name ASC
+            LIMIT 5
+            """,
+            tuple(parameters),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            f"""
+            WITH player_names AS (
+                SELECT
+                    playerid,
+                    NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
+                FROM lahman_people
+                WHERE COALESCE(playerid, '') <> ''
+            ),
+            opponent_names AS (
+                SELECT
+                    teamidretro AS team_code,
+                    name,
+                    ROW_NUMBER() OVER (PARTITION BY teamidretro ORDER BY CAST(yearid AS INTEGER) DESC) AS rn
+                FROM lahman_teams
+                WHERE COALESCE(teamidretro, '') <> ''
+            )
             SELECT
-                teamidretro AS team_code,
-                name,
-                ROW_NUMBER() OVER (PARTITION BY teamidretro ORDER BY CAST(yearid AS INTEGER) DESC) AS rn
-            FROM lahman_teams
-            WHERE COALESCE(teamidretro, '') <> ''
-        )
-        SELECT
-            COALESCE(player_names.player_name, context.player_id) AS player_name,
-            context.opponent,
-            COALESCE(onames.name, context.opponent) AS opponent_name,
-            context.plate_appearances,
-            context.at_bats,
-            context.hits,
-            context.doubles,
-            context.triples,
-            context.home_runs,
-            context.walks,
-            context.intentional_walks,
-            context.hit_by_pitch,
-            context.sacrifice_flies,
-            context.strikeouts,
-            context.runs_batted_in,
-            context.first_season,
-            context.last_season,
-            {metric_expression} AS metric_value
-        FROM retrosheet_player_opponent_contexts AS context
-        LEFT JOIN player_names
-          ON player_names.playerid = context.player_id
-        LEFT JOIN opponent_names AS onames
-          ON onames.team_code = context.opponent
-         AND onames.rn = 1
-        WHERE context.context_key = ?
-          {qualification_clause}
-          AND ({metric_expression}) IS NOT NULL
-        ORDER BY metric_value {order_direction}, context.plate_appearances DESC, player_name ASC
-        LIMIT 5
-        """,
-        tuple(parameters),
-    ).fetchall()
+                COALESCE(player_names.player_name, context.player_id) AS player_name,
+                context.opponent,
+                COALESCE(onames.name, context.opponent) AS opponent_name,
+                context.plate_appearances,
+                context.at_bats,
+                context.hits,
+                context.doubles,
+                context.triples,
+                context.home_runs,
+                context.walks,
+                context.intentional_walks,
+                context.hit_by_pitch,
+                context.sacrifice_flies,
+                context.strikeouts,
+                context.runs_batted_in,
+                context.first_season,
+                context.last_season,
+                {metric_expression} AS metric_value
+            FROM retrosheet_player_opponent_contexts AS context
+            LEFT JOIN player_names
+              ON player_names.playerid = context.player_id
+            LEFT JOIN opponent_names AS onames
+              ON onames.team_code = context.opponent
+             AND onames.rn = 1
+            WHERE context.context_key = ?
+              {qualification_clause}
+              AND ({metric_expression}) IS NOT NULL
+            ORDER BY metric_value {order_direction}, context.plate_appearances DESC, player_name ASC
+            LIMIT 5
+            """,
+            tuple(parameters),
+        ).fetchall()
     if not rows:
         return None
-    leaders = [
-        {
+    leaders = []
+    for row in rows:
+        entry = {
             "player_name": str(row["player_name"]),
-            "opponent_name": str(row["opponent_name"]),
             "plate_appearances": int(row["plate_appearances"]),
             "at_bats": int(row["at_bats"]),
             "hits": int(row["hits"]),
@@ -710,8 +790,13 @@ def fetch_team_relationship_rows(connection, query: TeamRelationshipQuery) -> li
             "last_season": int(row["last_season"]),
             "metric_value": float(row["metric_value"]),
         }
-        for row in rows
-    ]
+        if query.aggregate_scope == "player":
+            entry["teams_matched"] = int(row["teams_matched"])
+            entry["opponent_name"] = f"{int(row['teams_matched'])} team(s)"
+            entry["opponent_codes"] = str(row["opponent_codes"] or "")
+        else:
+            entry["opponent_name"] = str(row["opponent_name"])
+        leaders.append(entry)
     return leaders
 
 
@@ -719,12 +804,20 @@ def build_team_relationship_evidence(query: TeamRelationshipQuery, leaders: list
     lead = leaders[0]
     relationship_label = "former team" if query.relationship == "former" else "future team"
     metric_spec = CONTEXT_METRIC_BY_KEY[query.metric_key]
-    summary = (
-        f"The {query.descriptor} {count_metric_phrase(query.metric_key)} against a {relationship_label} belongs to "
-        f"{lead['player_name']} versus {lead['opponent_name']} at "
-        f"{format_context_metric_value(query.metric_key, lead['metric_value'])} "
-        f"across {lead['plate_appearances']} plate appearances from {lead['first_season']} to {lead['last_season']}."
-    )
+    if query.aggregate_scope == "player":
+        summary = (
+            f"The {query.descriptor} {count_metric_phrase(query.metric_key)} aggregated across all {relationship_label}s belongs to "
+            f"{lead['player_name']} at {format_context_metric_value(query.metric_key, lead['metric_value'])} "
+            f"across {lead['plate_appearances']} plate appearances versus {lead.get('teams_matched', 0)} matching team(s) "
+            f"from {lead['first_season']} to {lead['last_season']}."
+        )
+    else:
+        summary = (
+            f"The {query.descriptor} {count_metric_phrase(query.metric_key)} against a {relationship_label} belongs to "
+            f"{lead['player_name']} versus {lead['opponent_name']} at "
+            f"{format_context_metric_value(query.metric_key, lead['metric_value'])} "
+            f"across {lead['plate_appearances']} plate appearances from {lead['first_season']} to {lead['last_season']}."
+        )
     if query.sample_basis and query.min_sample_size > 0:
         summary = (
             f"{summary} I used a minimum of {query.min_sample_size} "
@@ -737,10 +830,17 @@ def build_team_relationship_evidence(query: TeamRelationshipQuery, leaders: list
         )
     trailing = leaders[1:4]
     if trailing:
-        next_rows = "; ".join(
-            f"{row['player_name']} vs {row['opponent_name']} {format_context_metric_value(query.metric_key, row['metric_value'])}"
-            for row in trailing
-        )
+        if query.aggregate_scope == "player":
+            next_rows = "; ".join(
+                f"{row['player_name']} {format_context_metric_value(query.metric_key, row['metric_value'])}"
+                f" across {row.get('teams_matched', 0)} team(s)"
+                for row in trailing
+            )
+        else:
+            next_rows = "; ".join(
+                f"{row['player_name']} vs {row['opponent_name']} {format_context_metric_value(query.metric_key, row['metric_value'])}"
+                for row in trailing
+            )
         summary = f"{summary} Next on the board: {next_rows}."
     return EvidenceSnippet(
         source="Historical Matchup Context",
@@ -751,6 +851,7 @@ def build_team_relationship_evidence(query: TeamRelationshipQuery, leaders: list
             "analysis_type": "player_team_context_leaderboard",
             "relationship": query.relationship,
             "metric": count_metric_label(query.metric_key),
+            "aggregate_scope": query.aggregate_scope,
             "leaders": leaders,
         },
     )

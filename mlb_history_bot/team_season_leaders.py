@@ -374,6 +374,9 @@ def select_historical_hitting_metric(
     ops: float | None,
     row,
 ) -> float | None:
+    singles = (safe_int(row["hits"]) or 0) - (safe_int(row["doubles"]) or 0) - (safe_int(row["triples"]) or 0) - (safe_int(row["home_runs"]) or 0)
+    extra_base_hits = (safe_int(row["doubles"]) or 0) + (safe_int(row["triples"]) or 0) + (safe_int(row["home_runs"]) or 0)
+    total_bases = singles + (2 * (safe_int(row["doubles"]) or 0)) + (3 * (safe_int(row["triples"]) or 0)) + (4 * (safe_int(row["home_runs"]) or 0))
     return {
         "games": safe_float(row["games"]),
         "plate_appearances": float(plate_appearances),
@@ -383,8 +386,11 @@ def select_historical_hitting_metric(
         "obp": obp,
         "slg": slg,
         "ops": ops,
+        "singles": float(singles),
         "doubles": safe_float(row["doubles"]),
         "triples": safe_float(row["triples"]),
+        "total_bases": float(total_bases),
+        "extra_base_hits": float(extra_base_hits),
         "home_runs": safe_float(row["home_runs"]),
         "hits": safe_float(row["hits"]),
         "rbi": safe_float(row["rbi"]),
@@ -415,6 +421,10 @@ def select_historical_pitching_metric(metric: str, ipouts: int, row) -> float | 
         "walks": safe_float(row["walks"]),
         "strikeouts": safe_float(row["strikeouts"]),
         "strikeouts_per_9": ((27.0 * strikeouts) / ipouts) if ipouts else None,
+        "walks_per_9": ((27.0 * walks) / ipouts) if ipouts else None,
+        "hits_per_9": ((27.0 * hits_allowed) / ipouts) if ipouts else None,
+        "home_runs_per_9": ((27.0 * (safe_int(row["home_runs_allowed"]) or 0)) / ipouts) if ipouts else None,
+        "strikeout_to_walk": (strikeouts / walks) if walks else None,
     }.get(metric)
 
 
