@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from .config import Settings
@@ -59,7 +59,9 @@ TAG_PATTERNS = {
 
 @dataclass(slots=True)
 class ReplayQuery:
-    target_date: str
+    start_date: str
+    end_date: str
+    date_label: str
     player_queries: list[str] = field(default_factory=list)
     replay_tags: list[str] = field(default_factory=list)
 
@@ -129,17 +131,20 @@ class SportyReplayFinder:
 
         focus = ", ".join(replay_query.player_queries) if replay_query.player_queries else "the requested theme"
         summary = (
-            f"Found {len(clips)} public Baseball Savant replay clip(s) tied to {focus} on {replay_query.target_date}. "
+            f"Found {len(clips)} public Baseball Savant replay clip(s) tied to {focus} "
+            f"{format_replay_window_phrase(replay_query)}. "
             + " ".join(lines)
         )
         return [
             EvidenceSnippet(
                 source="Sporty Replay",
-                title=f"{replay_query.target_date} replay matches",
+                title=f"{replay_query.date_label} replay matches",
                 citation="Baseball Savant sporty-videos pages matched against MLB Stats API game feeds",
                 summary=summary,
                 payload={
-                    "target_date": replay_query.target_date,
+                    "start_date": replay_query.start_date,
+                    "end_date": replay_query.end_date,
+                    "date_label": replay_query.date_label,
                     "player_queries": replay_query.player_queries,
                     "replay_tags": replay_query.replay_tags,
                     "clip_count": len(clips),
@@ -156,10 +161,11 @@ class SportyReplayFinder:
         if replay_query.player_queries and not exact_names:
             return []
 
-        schedule = self.live_client.schedule(replay_query.target_date)
+        schedule = self._schedule_payload(replay_query, players_by_id)
         clips: list[SportyReplayClip] = []
         seen_play_ids: set[str] = set()
         for day in schedule.get("dates", []):
+            game_date = str(day.get("date") or replay_query.end_date)
             for game in day.get("games", []):
                 if game.get("status", {}).get("codedGameState") in {"S", "P"}:
                     continue
@@ -197,7 +203,7 @@ class SportyReplayFinder:
                         SportyReplayClip(
                             play_id=play_id,
                             game_pk=game_pk,
-                            game_date=replay_query.target_date,
+                            game_date=game_date,
                             title=sporty_page.title or str(play.get("result", {}).get("description") or ""),
                             description=str(play.get("result", {}).get("description") or ""),
                             inning=int(play.get("about", {}).get("inning") or 0),
@@ -233,6 +239,18 @@ class SportyReplayFinder:
         )
         return clips[:6]
 
+    def _schedule_payload(self, replay_query: ReplayQuery, players_by_id: dict[int, str]) -> dict[str, Any]:
+        if replay_query.start_date == replay_query.end_date:
+            return self.live_client.schedule(replay_query.start_date)
+        team_id = self._resolve_current_team_id(players_by_id)
+        if replay_query.player_queries and not team_id:
+            return {"dates": []}
+        return self.live_client.schedule_range(
+            replay_query.start_date,
+            replay_query.end_date,
+            team_id=team_id,
+        )
+
     def _resolve_players(self, player_queries: list[str]) -> dict[int, str]:
         players_by_id: dict[int, str] = {}
         for player_query in player_queries[:2]:
@@ -243,21 +261,37 @@ class SportyReplayFinder:
                     players_by_id.setdefault(player_id, full_name)
         return players_by_id
 
+    def _resolve_current_team_id(self, players_by_id: dict[int, str]) -> int | None:
+        for player_id in players_by_id:
+            details = self.live_client.person_details(player_id)
+            if not details:
+                continue
+            team = details.get("currentTeam") or {}
+            team_id = int(team.get("id") or 0)
+            if team_id:
+                return team_id
+        return None
+
     def _empty_result_snippet(self, replay_query: ReplayQuery) -> EvidenceSnippet:
-        schedule = self.live_client.schedule(replay_query.target_date)
+        schedule = self._schedule_payload(replay_query, self._resolve_players(replay_query.player_queries))
         games = [game for day in schedule.get("dates", []) for game in day.get("games", [])]
         all_not_started = games and all(game.get("status", {}).get("codedGameState") in {"S", "P"} for game in games)
         focus = ", ".join(replay_query.player_queries) if replay_query.player_queries else "that query"
-        summary = f"No public Baseball Savant replay pages matched {focus} on {replay_query.target_date}."
+        summary = f"No public Baseball Savant replay pages matched {focus} {format_replay_window_phrase(replay_query)}."
         if all_not_started:
-            summary = f"{summary} MLB games for that date have not started yet."
+            if replay_query.start_date == replay_query.end_date:
+                summary = f"{summary} MLB games for that date have not started yet."
+            else:
+                summary = f"{summary} MLB games in that recent search window have not started yet."
         return EvidenceSnippet(
             source="Sporty Replay",
-            title=f"{replay_query.target_date} replay status",
+            title=f"{replay_query.date_label} replay status",
             citation="Baseball Savant sporty-videos pages checked against MLB Stats API game feeds",
             summary=summary,
             payload={
-                "target_date": replay_query.target_date,
+                "start_date": replay_query.start_date,
+                "end_date": replay_query.end_date,
+                "date_label": replay_query.date_label,
                 "player_queries": replay_query.player_queries,
                 "replay_tags": replay_query.replay_tags,
                 "clip_count": 0,
@@ -268,19 +302,31 @@ class SportyReplayFinder:
 
 def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
     target_date = extract_target_date(question, default_year)
-    if target_date is None:
-        return None
     player_queries = extract_name_candidates(question)
     replay_tags = sorted(extract_replay_tags(question))
     has_visual_intent = contains_visual_hint(question)
     if not has_visual_intent and looks_like_statistical_query(question):
         return None
+    if target_date is None and not player_queries:
+        return None
     if not has_visual_intent and not player_queries:
         return None
     if not player_queries and not replay_tags and not has_visual_intent:
         return None
+    if target_date is None:
+        end_date = resolve_recent_replay_end_date(default_year)
+        start_date = end_date - timedelta(days=400)
+        return ReplayQuery(
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            date_label=f"{start_date.isoformat()} through {end_date.isoformat()}",
+            player_queries=player_queries[:2],
+            replay_tags=replay_tags,
+        )
     return ReplayQuery(
-        target_date=target_date.isoformat(),
+        start_date=target_date.isoformat(),
+        end_date=target_date.isoformat(),
+        date_label=target_date.isoformat(),
         player_queries=player_queries[:2],
         replay_tags=replay_tags,
     )
@@ -288,6 +334,21 @@ def build_replay_query(question: str, default_year: int) -> ReplayQuery | None:
 
 def wants_sporty_replay(question: str, default_year: int) -> bool:
     return build_replay_query(question, default_year) is not None
+
+
+def resolve_recent_replay_end_date(default_year: int) -> date:
+    today = date.today()
+    if today.year == default_year:
+        return today
+    if today.year > default_year:
+        return date(default_year, 12, 31)
+    return date(default_year, 4, 1)
+
+
+def format_replay_window_phrase(replay_query: ReplayQuery) -> str:
+    if replay_query.start_date == replay_query.end_date:
+        return f"on {replay_query.start_date}"
+    return f"from {replay_query.start_date} through {replay_query.end_date}"
 
 
 def extract_replay_tags(question: str) -> set[str]:

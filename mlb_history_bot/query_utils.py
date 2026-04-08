@@ -124,6 +124,19 @@ LOWERCASE_NAME_LEADIN_PATTERNS = (
         r"\btell\s+me\s+about\s+(?!the\b|a\b|an\b)([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})\b",
         re.IGNORECASE,
     ),
+    re.compile(
+        r"\bshow\s+me\s+(?:a|an|the)?\s*(?:clip|clips|video|videos|replay|replays|highlight|highlights)\s+of\s+"
+        r"(?:(?:the|a|an)\s+)?([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})"
+        r"(?=\s+(?:home\s+runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?|hits?|singles?|doubles?|triples?|"
+        r"strikeouts?|walks?|stolen\s+bases?|defensive|fielding|batting|pitching)\b|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bshow\s+me\s+(?!the\b|a\b|an\b)([a-z][a-z'.-]+(?:\s+[a-z][a-z'.-]+){1,3})"
+        r"(?=\s+(?:home\s+runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?|hits?|singles?|doubles?|triples?|"
+        r"strikeouts?|walks?|stolen\s+bases?|defensive|fielding|batting|pitching))",
+        re.IGNORECASE,
+    ),
 )
 CURRENT_SCOPE_HINTS = {
     "today",
@@ -392,6 +405,19 @@ def extract_name_candidates(question: str) -> list[str]:
 
 
 def normalize_name_candidate(candidate: str) -> str:
+    candidate = re.sub(
+        r"^(?:clip|clips|video|videos|replay|replays|highlight|highlights)\s+of\s+",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = re.sub(
+        r"\s+(?:home\s+runs?|homeruns?|homers?|clips?|videos?|replays?|highlights?|hits?|singles?|doubles?|triples?|"
+        r"strikeouts?|walks?|stolen\s+bases?|defensive|fielding|batting|pitching)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip()
     words = candidate.split()
     if len(words) >= 3 and words[0] in LEADING_QUESTION_WORDS:
         words = words[1:]

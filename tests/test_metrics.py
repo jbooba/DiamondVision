@@ -10,7 +10,7 @@ from mlb_history_bot.fielding_bible_search import (
 from mlb_history_bot.home_run_robbery import extract_target_date, normalize_person_name
 from mlb_history_bot.metrics import MetricCatalog
 from mlb_history_bot.search import extract_name_candidates, extract_year
-from mlb_history_bot.sporty_research import extract_replay_tags, wants_sporty_replay
+from mlb_history_bot.sporty_research import build_replay_query, extract_replay_tags, wants_sporty_replay
 
 
 def test_metric_catalog_finds_drs() -> None:
@@ -30,6 +30,16 @@ def test_extract_name_candidates() -> None:
 def test_extract_name_candidates_from_lowercase_profile_prompt() -> None:
     names = extract_name_candidates("who is nathan church")
     assert names == ["Nathan Church"]
+
+
+def test_extract_name_candidates_from_lowercase_clip_prompt() -> None:
+    names = extract_name_candidates("show me a clip of a freddie freeman home run")
+    assert names == ["Freddie Freeman"]
+
+
+def test_extract_name_candidates_from_lowercase_event_prompt() -> None:
+    names = extract_name_candidates("show me clips of pete alonso homeruns off curveballs in 2025")
+    assert names == ["Pete Alonso"]
 
 
 def test_extract_year() -> None:
@@ -92,6 +102,18 @@ def test_extract_replay_tags_for_defensive_home_run_question() -> None:
 
 def test_wants_sporty_replay_for_player_date_query() -> None:
     assert wants_sporty_replay("Show me Jo Adell's defensive clips tonight.", 2026)
+
+
+def test_wants_sporty_replay_for_undated_player_clip_query() -> None:
+    assert wants_sporty_replay("show me a clip of a freddie freeman home run", 2026)
+
+
+def test_build_replay_query_defaults_undated_player_clip_to_recent_window() -> None:
+    query = build_replay_query("show me a clip of a freddie freeman home run", 2026)
+    assert query is not None
+    assert query.start_date <= query.end_date
+    assert query.player_queries == ["Freddie Freeman"]
+    assert "home run" in query.replay_tags
 
 
 def test_wants_sporty_replay_false_without_play_context() -> None:
