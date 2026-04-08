@@ -39,11 +39,16 @@ GAME_STREAK_SOURCE_COLUMNS = (
     "gametype",
     "b_pa",
     "b_ab",
+    "b_r",
     "b_h",
+    "b_d",
+    "b_t",
     "b_hr",
+    "b_rbi",
     "b_w",
     "b_hbp",
     "b_k",
+    "b_sb",
 )
 
 AB_WITHOUT_STRIKEOUT_PATTERN = re.compile(
@@ -58,8 +63,44 @@ HIT_STREAK_PATTERN = re.compile(
     r"\bhit streak\b|\bconsecutive games?\b.*\bwith\b.*\bhits?\b|\bgames?\b.*\bwith\b.*\bhits?\b",
     re.IGNORECASE,
 )
+HITLESS_STREAK_PATTERN = re.compile(
+    r"\bhitless streak\b|\bgames?\b.*\bwithout\b.*\bhits?\b|\bwithout\b.*\bhits?\b.*\bgames?\b",
+    re.IGNORECASE,
+)
 HOME_RUN_STREAK_PATTERN = re.compile(
     r"\bhome run streak\b|\bhomer streak\b|\bconsecutive games?\b.*\bwith\b.*\bhome runs?\b|\bgames?\b.*\bwith\b.*\bhome runs?\b",
+    re.IGNORECASE,
+)
+HOME_RUNLESS_STREAK_PATTERN = re.compile(
+    r"\bhome[- ]runless streak\b|\bgames?\b.*\bwithout\b.*\bhome runs?\b|\bwithout\b.*\bhome runs?\b.*\bgames?\b",
+    re.IGNORECASE,
+)
+WALK_STREAK_PATTERN = re.compile(
+    r"\bwalk streak\b|\bconsecutive games?\b.*\bwith\b.*\bwalks?\b|\bgames?\b.*\bwith\b.*\bwalks?\b",
+    re.IGNORECASE,
+)
+WALKLESS_STREAK_PATTERN = re.compile(
+    r"\bwalkless streak\b|\bgames?\b.*\bwithout\b.*\bwalks?\b|\bwithout\b.*\bwalks?\b.*\bgames?\b",
+    re.IGNORECASE,
+)
+RBI_STREAK_PATTERN = re.compile(
+    r"\brbi streak\b|\bruns batted in streak\b|\bconsecutive games?\b.*\bwith\b.*\brbi\b|\bgames?\b.*\bwith\b.*\brbi\b",
+    re.IGNORECASE,
+)
+RUN_STREAK_PATTERN = re.compile(
+    r"\brun(?:s)? scored streak\b|\bconsecutive games?\b.*\bwith\b.*\bruns? scored\b|\bgames?\b.*\bwith\b.*\bruns? scored\b",
+    re.IGNORECASE,
+)
+STEAL_STREAK_PATTERN = re.compile(
+    r"\bstolen base streak\b|\bsteal streak\b|\bconsecutive games?\b.*\bwith\b.*\bstolen bases?\b|\bgames?\b.*\bwith\b.*\bstolen bases?\b",
+    re.IGNORECASE,
+)
+EXTRA_BASE_HIT_STREAK_PATTERN = re.compile(
+    r"\bextra[- ]base hit streak\b|\bxbh streak\b|\bconsecutive games?\b.*\bwith\b.*\bextra[- ]base hits?\b|\bgames?\b.*\bwith\b.*\bextra[- ]base hits?\b",
+    re.IGNORECASE,
+)
+GAMES_WITH_STRIKEOUT_PATTERN = re.compile(
+    r"\bstrikeout streak\b|\bstrike out streak\b|\bconsecutive games?\b.*\bwith\b.*\bstrike(?: ?out|outs?)\b|\bgames?\b.*\bwith\b.*\bstrike(?: ?out|outs?)\b",
     re.IGNORECASE,
 )
 ON_BASE_STREAK_PATTERN = re.compile(
@@ -116,10 +157,64 @@ STREAK_SPECS: tuple[StreakSpec, ...] = (
         aliases=("hit streak", "games with a hit", "games with hits"),
     ),
     StreakSpec(
+        key="games_without_hit",
+        label="games without a hit",
+        unit_label="games",
+        aliases=("games without a hit", "hitless streak"),
+    ),
+    StreakSpec(
         key="games_with_home_run",
         label="home run streak",
         unit_label="games",
         aliases=("home run streak", "homer streak", "games with a home run"),
+    ),
+    StreakSpec(
+        key="games_without_home_run",
+        label="games without a home run",
+        unit_label="games",
+        aliases=("games without a home run", "home runless streak"),
+    ),
+    StreakSpec(
+        key="games_with_walk",
+        label="walk streak",
+        unit_label="games",
+        aliases=("walk streak", "games with a walk", "games with walks"),
+    ),
+    StreakSpec(
+        key="games_without_walk",
+        label="games without a walk",
+        unit_label="games",
+        aliases=("games without a walk", "walkless streak"),
+    ),
+    StreakSpec(
+        key="games_with_rbi",
+        label="RBI streak",
+        unit_label="games",
+        aliases=("rbi streak", "games with an rbi", "games with rbi"),
+    ),
+    StreakSpec(
+        key="games_with_run",
+        label="run scored streak",
+        unit_label="games",
+        aliases=("run scored streak", "games with a run scored", "games with runs scored"),
+    ),
+    StreakSpec(
+        key="games_with_steal",
+        label="stolen base streak",
+        unit_label="games",
+        aliases=("stolen base streak", "steal streak", "games with a stolen base"),
+    ),
+    StreakSpec(
+        key="games_with_extra_base_hit",
+        label="extra-base-hit streak",
+        unit_label="games",
+        aliases=("extra-base-hit streak", "xbh streak", "games with an extra-base hit"),
+    ),
+    StreakSpec(
+        key="games_with_strikeout",
+        label="games with a strikeout",
+        unit_label="games",
+        aliases=("strikeout streak", "games with a strikeout", "games with strikeouts"),
     ),
     StreakSpec(
         key="games_on_base",
@@ -194,10 +289,28 @@ def find_streak_spec(question: str) -> StreakSpec | None:
         return STREAK_SPEC_BY_KEY["ab_without_strikeout"]
     if PA_WITHOUT_STRIKEOUT_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["pa_without_strikeout"]
+    if HITLESS_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_without_hit"]
     if HIT_STREAK_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_with_hit"]
+    if HOME_RUNLESS_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_without_home_run"]
     if HOME_RUN_STREAK_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_with_home_run"]
+    if WALKLESS_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_without_walk"]
+    if WALK_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_walk"]
+    if RBI_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_rbi"]
+    if RUN_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_run"]
+    if STEAL_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_steal"]
+    if EXTRA_BASE_HIT_STREAK_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_extra_base_hit"]
+    if GAMES_WITH_STRIKEOUT_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["games_with_strikeout"]
     if ON_BASE_STREAK_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_on_base"]
     if GAMES_WITHOUT_STRIKEOUT_PATTERN.search(question):
@@ -389,26 +502,48 @@ def build_play_streak_records(
 def build_game_streak_records(connection) -> tuple[list[dict[str, Any]], list[str]]:
     if not table_exists(connection, "retrosheet_batting"):
         return [], ["Skipped game-based Retrosheet streaks because retrosheet_batting is not available."]
+    existing_columns = {column.lower() for column in list_table_columns(connection, "retrosheet_batting")}
+    select_parts = [column if column.lower() in existing_columns else f"'' AS {column}" for column in ("id", "gid", "date", "gametype")]
+    for column in GAME_STREAK_SOURCE_COLUMNS[4:]:
+        select_parts.append(column if column.lower() in existing_columns else f"'0' AS {column}")
     best_by_key: dict[str, dict[str, dict[str, Any]]] = {
         "games_with_hit": {},
+        "games_without_hit": {},
         "games_with_home_run": {},
+        "games_without_home_run": {},
+        "games_with_walk": {},
+        "games_without_walk": {},
+        "games_with_rbi": {},
+        "games_with_run": {},
+        "games_with_steal": {},
+        "games_with_extra_base_hit": {},
+        "games_with_strikeout": {},
         "games_on_base": {},
         "games_without_strikeout": {},
     }
     current_by_key: dict[str, dict[str, _StreakState]] = {
         "games_with_hit": {},
+        "games_without_hit": {},
         "games_with_home_run": {},
+        "games_without_home_run": {},
+        "games_with_walk": {},
+        "games_without_walk": {},
+        "games_with_rbi": {},
+        "games_with_run": {},
+        "games_with_steal": {},
+        "games_with_extra_base_hit": {},
+        "games_with_strikeout": {},
         "games_on_base": {},
         "games_without_strikeout": {},
     }
     total_rows = 0
     cursor = connection.execute(
         """
-        SELECT id, gid, date, gametype, b_pa, b_ab, b_h, b_hr, b_w, b_hbp, b_k
+        SELECT {select_sql}
         FROM retrosheet_batting
         WHERE lower(COALESCE(gametype, '')) = 'regular'
         ORDER BY date, gid, id
-        """
+        """.format(select_sql=", ".join(select_parts))
     )
     for row in cursor:
         total_rows += 1
@@ -423,10 +558,16 @@ def build_game_streak_records(connection) -> tuple[list[dict[str, Any]], list[st
         game_date = str(row["date"] or "")
         season = parse_season(game_date)
         hits = safe_int(row["b_h"])
+        doubles = safe_int(row["b_d"])
+        triples = safe_int(row["b_t"])
         home_runs = safe_int(row["b_hr"])
+        runs = safe_int(row["b_r"])
+        rbi = safe_int(row["b_rbi"])
         walks = safe_int(row["b_w"])
         hit_by_pitch = safe_int(row["b_hbp"])
         strikeouts = safe_int(row["b_k"])
+        steals = safe_int(row["b_sb"])
+        extra_base_hits = doubles + triples + home_runs
         if at_bats > 0:
             update_success_streak(
                 best_by_key["games_with_hit"],
@@ -439,6 +580,17 @@ def build_game_streak_records(connection) -> tuple[list[dict[str, Any]], list[st
                 season=season,
                 streak_key="games_with_hit",
             )
+            update_success_streak(
+                best_by_key["games_without_hit"],
+                current_by_key["games_without_hit"],
+                player_id,
+                success=hits == 0,
+                increment=1,
+                game_date=game_date,
+                game_id=game_id,
+                season=season,
+                streak_key="games_without_hit",
+            )
         update_success_streak(
             best_by_key["games_with_home_run"],
             current_by_key["games_with_home_run"],
@@ -449,6 +601,94 @@ def build_game_streak_records(connection) -> tuple[list[dict[str, Any]], list[st
             game_id=game_id,
             season=season,
             streak_key="games_with_home_run",
+        )
+        update_success_streak(
+            best_by_key["games_without_home_run"],
+            current_by_key["games_without_home_run"],
+            player_id,
+            success=home_runs == 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_without_home_run",
+        )
+        update_success_streak(
+            best_by_key["games_with_walk"],
+            current_by_key["games_with_walk"],
+            player_id,
+            success=walks > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_walk",
+        )
+        update_success_streak(
+            best_by_key["games_without_walk"],
+            current_by_key["games_without_walk"],
+            player_id,
+            success=walks == 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_without_walk",
+        )
+        update_success_streak(
+            best_by_key["games_with_rbi"],
+            current_by_key["games_with_rbi"],
+            player_id,
+            success=rbi > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_rbi",
+        )
+        update_success_streak(
+            best_by_key["games_with_run"],
+            current_by_key["games_with_run"],
+            player_id,
+            success=runs > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_run",
+        )
+        update_success_streak(
+            best_by_key["games_with_steal"],
+            current_by_key["games_with_steal"],
+            player_id,
+            success=steals > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_steal",
+        )
+        update_success_streak(
+            best_by_key["games_with_extra_base_hit"],
+            current_by_key["games_with_extra_base_hit"],
+            player_id,
+            success=extra_base_hits > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_extra_base_hit",
+        )
+        update_success_streak(
+            best_by_key["games_with_strikeout"],
+            current_by_key["games_with_strikeout"],
+            player_id,
+            success=strikeouts > 0,
+            increment=1,
+            game_date=game_date,
+            game_id=game_id,
+            season=season,
+            streak_key="games_with_strikeout",
         )
         update_success_streak(
             best_by_key["games_on_base"],

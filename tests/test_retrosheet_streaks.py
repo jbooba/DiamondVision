@@ -47,11 +47,16 @@ def seed_batting_and_people(connection: sqlite3.Connection) -> None:
             gametype TEXT,
             b_pa TEXT,
             b_ab TEXT,
+            b_r TEXT,
             b_h TEXT,
+            b_d TEXT,
+            b_t TEXT,
             b_hr TEXT,
+            b_rbi TEXT,
             b_w TEXT,
             b_hbp TEXT,
-            b_k TEXT
+            b_k TEXT,
+            b_sb TEXT
         )
         """
     )
@@ -66,16 +71,16 @@ def seed_batting_and_people(connection: sqlite3.Connection) -> None:
     )
     connection.executemany(
         """
-        INSERT INTO retrosheet_batting(id, gid, date, gametype, b_pa, b_ab, b_h, b_hr, b_w, b_hbp, b_k)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO retrosheet_batting(id, gid, date, gametype, b_pa, b_ab, b_r, b_h, b_d, b_t, b_hr, b_rbi, b_w, b_hbp, b_k, b_sb)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("dimagjo01", "g1", "19410515", "regular", "4", "4", "1", "0", "0", "0", "0"),
-            ("dimagjo01", "g2", "19410516", "regular", "4", "4", "1", "0", "0", "0", "0"),
-            ("dimagjo01", "g3", "19410517", "regular", "4", "4", "1", "0", "0", "0", "1"),
-            ("stairsm01", "g4", "20010901", "regular", "4", "4", "0", "1", "0", "0", "1"),
-            ("stairsm01", "g5", "20010902", "regular", "4", "4", "0", "1", "0", "0", "0"),
-            ("stairsm01", "g6", "20010903", "regular", "4", "4", "0", "0", "0", "0", "0"),
+            ("dimagjo01", "g1", "19410515", "regular", "4", "4", "1", "1", "0", "0", "0", "1", "0", "0", "0", "0"),
+            ("dimagjo01", "g2", "19410516", "regular", "4", "4", "1", "1", "0", "0", "0", "1", "0", "0", "0", "0"),
+            ("dimagjo01", "g3", "19410517", "regular", "4", "4", "1", "1", "0", "0", "0", "1", "0", "0", "1", "0"),
+            ("stairsm01", "g4", "20010901", "regular", "4", "4", "0", "0", "0", "0", "1", "2", "1", "0", "1", "0"),
+            ("stairsm01", "g5", "20010902", "regular", "4", "4", "0", "0", "1", "0", "1", "1", "1", "0", "0", "0"),
+            ("stairsm01", "g6", "20010903", "regular", "4", "4", "0", "0", "0", "0", "0", "0", "1", "0", "0", "0"),
         ],
     )
     connection.commit()
@@ -127,6 +132,16 @@ def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Pa
         assert spaced_phrase.payload["analysis_type"] == "player_streak_leaderboard"
         assert spaced_phrase.payload["rows"][0]["player_name"] == "Joe Sewell"
         assert spaced_phrase.payload["rows"][0]["streak_length"] == 3
+
+        walk_snippet = researcher.build_snippet(connection, "who has the longest walk streak")
+        assert walk_snippet is not None
+        assert walk_snippet.payload["rows"][0]["player_name"] == "Matt Stairs"
+        assert walk_snippet.payload["rows"][0]["streak_length"] == 3
+
+        hitless_snippet = researcher.build_snippet(connection, "who has the longest games without a hit")
+        assert hitless_snippet is not None
+        assert hitless_snippet.payload["rows"][0]["player_name"] == "Matt Stairs"
+        assert hitless_snippet.payload["rows"][0]["streak_length"] == 3
 
         hit_snippet = researcher.build_snippet(connection, "who has the longest hit streak")
         assert hit_snippet is not None
