@@ -19,6 +19,7 @@ Rules:
 - If the exact answer is not available from the evidence, say so plainly and explain the source gap.
 - When a metric is proprietary or not exactly computable from public inputs, say that clearly.
 - Keep the answer concise but analytical.
+- Use plain text only. Do not use Markdown emphasis, bold markers, italics, or bullet syntax that relies on Markdown rendering.
 - End every answer with a 'Sources:' line listing the evidence labels you used.
 """
 
@@ -105,6 +106,7 @@ class BaseballChatbot:
             answer = self._fallback_answer(question, context)
         else:
             answer = self._model_answer(question, resolved_question, context, history)
+        answer = sanitize_answer_text(answer)
         citations = [snippet.title for snippet in context.all_snippets()]
         self.sessions[active_session_id].append(
             {"role": "user", "content": question, "resolved_question": resolved_question}
@@ -324,3 +326,13 @@ def extract_first_json_object(value: str) -> str:
         return stripped
     match = re.search(r"\{.*\}", value, re.DOTALL)
     return match.group(0) if match else ""
+
+
+def sanitize_answer_text(value: str) -> str:
+    cleaned = value.replace("\r\n", "\n")
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^[ \t]*\*[ \t]+", "- ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
