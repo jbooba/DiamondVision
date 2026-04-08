@@ -107,7 +107,7 @@ def parse_cohort_metric_query(connection, question: str, settings: Settings) -> 
     start_season = None
     end_season = None
     scope_label = cohort.label
-    if cohort.kind == "birth_country":
+    if cohort.kind != "manager_era":
         current_season = settings.live_season or date.today().year
         referenced_season = extract_referenced_season(question, current_season)
         if referenced_season is not None:

@@ -29,6 +29,19 @@ MINIMUM_QUALIFIER_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+LAST_N_SEASONS_PATTERN = re.compile(
+    r"\b(?P<kind>last|past|previous)\s+(?P<count>[a-z0-9-]+(?:\s+[a-z0-9-]+){0,2})\s+(?P<unit>years?|seasons?)\b",
+    re.IGNORECASE,
+)
+SINCE_SEASON_PATTERN = re.compile(r"\bsince\s+(18\d{2}|19\d{2}|20\d{2})\b", re.IGNORECASE)
+FROM_TO_SEASON_PATTERN = re.compile(
+    r"\bfrom\s+(18\d{2}|19\d{2}|20\d{2})\s+(?:through|thru|to|-)\s+(18\d{2}|19\d{2}|20\d{2})\b",
+    re.IGNORECASE,
+)
+BETWEEN_AND_SEASON_PATTERN = re.compile(
+    r"\bbetween\s+(18\d{2}|19\d{2}|20\d{2})\s+and\s+(18\d{2}|19\d{2}|20\d{2})\b",
+    re.IGNORECASE,
+)
 
 MONTHS = {
     "january": 1,
@@ -134,6 +147,14 @@ class DateWindow:
         return self.start_date == self.end_date
 
 
+@dataclass(slots=True)
+class SeasonSpan:
+    start_season: int
+    end_season: int
+    label: str
+    aggregate: bool = True
+
+
 def extract_target_date(question: str, default_year: int) -> date | None:
     window = extract_date_window(question, default_year)
     if window is None or not window.is_single_day:
@@ -165,6 +186,52 @@ def extract_referenced_season(question: str, current_season: int) -> int | None:
         return current_season - 1
     if "this year" in lowered or "this season" in lowered or "current season" in lowered or "current year" in lowered:
         return current_season
+    return None
+
+
+def extract_season_span(question: str, current_season: int) -> SeasonSpan | None:
+    lowered = question.lower()
+    match = FROM_TO_SEASON_PATTERN.search(lowered)
+    if match:
+        start_season = int(match.group(1))
+        end_season = int(match.group(2))
+        if start_season > end_season:
+            start_season, end_season = end_season, start_season
+        return SeasonSpan(start_season, end_season, f"{start_season}-{end_season}")
+
+    match = BETWEEN_AND_SEASON_PATTERN.search(lowered)
+    if match:
+        start_season = int(match.group(1))
+        end_season = int(match.group(2))
+        if start_season > end_season:
+            start_season, end_season = end_season, start_season
+        return SeasonSpan(start_season, end_season, f"{start_season}-{end_season}")
+
+    match = SINCE_SEASON_PATTERN.search(lowered)
+    if match:
+        start_season = int(match.group(1))
+        end_season = current_season
+        if start_season > end_season:
+            return None
+        return SeasonSpan(start_season, end_season, f"since {start_season}")
+
+    match = LAST_N_SEASONS_PATTERN.search(lowered)
+    if match:
+        count = parse_number_token(match.group("count"))
+        if count is None or count <= 0:
+            return None
+        kind = match.group("kind").lower()
+        if kind == "previous":
+            end_season = current_season - 1
+            start_season = end_season - count + 1
+        else:
+            end_season = current_season
+            start_season = end_season - count + 1
+        if start_season > end_season:
+            return None
+        label = f"{start_season}-{end_season}"
+        return SeasonSpan(start_season, end_season, label)
+
     return None
 
 

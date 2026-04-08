@@ -24,7 +24,7 @@ class CompiledContext:
     warnings: list[str] = field(default_factory=list)
 
     def all_snippets(self) -> list[EvidenceSnippet]:
-        return [*self.glossary_entries, *self.historical_evidence, *self.replay_evidence, *self.live_evidence]
+        return [*self.historical_evidence, *self.replay_evidence, *self.live_evidence, *self.glossary_entries]
 
 
 @dataclass(slots=True)

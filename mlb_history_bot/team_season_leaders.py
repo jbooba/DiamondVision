@@ -402,14 +402,23 @@ def select_historical_hitting_metric(
     }.get(metric)
 
 
-def select_historical_pitching_metric(metric: str, ipouts: int, row) -> float | None:
+def select_historical_pitching_metric(metric: str, ipouts: int, row, *, fip_constant: float | None = None) -> float | None:
     hits_allowed = safe_int(row["hits_allowed"]) or 0
     walks = safe_int(row["walks"]) or 0
     strikeouts = safe_int(row["strikeouts"]) or 0
+    hit_by_pitch = safe_int(row["hit_by_pitch"]) or 0
+    innings_pitched = (ipouts / 3.0) if ipouts else 0.0
+    fip = None
+    if innings_pitched and fip_constant is not None:
+        fip = (
+            ((13.0 * (safe_int(row["home_runs_allowed"]) or 0)) + (3.0 * (walks + hit_by_pitch)) - (2.0 * strikeouts))
+            / innings_pitched
+        ) + fip_constant
     return {
         "games": safe_float(row["games"]),
         "games_started": safe_float(row["games_started"]),
         "era": (27.0 * (safe_int(row["earned_runs"]) or 0) / ipouts) if ipouts else None,
+        "fip": fip,
         "whip": ((hits_allowed + walks) / (ipouts / 3.0)) if ipouts else None,
         "wins": safe_float(row["wins"]),
         "losses": safe_float(row["losses"]),

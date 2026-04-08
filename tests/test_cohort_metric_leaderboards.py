@@ -22,7 +22,17 @@ def build_test_connection() -> sqlite3.Connection:
             retroid TEXT,
             namefirst TEXT,
             namelast TEXT,
-            birthcountry TEXT
+            birthcountry TEXT,
+            bats TEXT,
+            throws TEXT
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE lahman_halloffame (
+            playerid TEXT,
+            inducted TEXT
         )
         """
     )
@@ -110,13 +120,21 @@ def build_test_connection() -> sqlite3.Connection:
     )
 
     con.executemany(
-        "INSERT INTO lahman_people(playerid, retroid, namefirst, namelast, birthcountry) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO lahman_people(playerid, retroid, namefirst, namelast, birthcountry, bats, throws) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            ("buck01", "showb001", "Buck", "Showalter", "USA"),
-            ("alonsp01", "alonp001", "Pete", "Alonso", "USA"),
-            ("nimmbr01", "nimmb001", "Brandon", "Nimmo", "USA"),
-            ("devers01", "dever001", "Rafael", "Devers", "Dominican Republic"),
-            ("sotoju01", "sotoj001", "Juan", "Soto", "Dominican Republic"),
+            ("buck01", "showb001", "Buck", "Showalter", "USA", "R", "R"),
+            ("alonsp01", "alonp001", "Pete", "Alonso", "USA", "R", "R"),
+            ("nimmbr01", "nimmb001", "Brandon", "Nimmo", "USA", "L", "R"),
+            ("devers01", "dever001", "Rafael", "Devers", "Dominican Republic", "L", "R"),
+            ("sotoju01", "sotoj001", "Juan", "Soto", "Dominican Republic", "L", "L"),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO lahman_halloffame(playerid, inducted) VALUES (?, ?)",
+        [
+            ("alonsp01", "N"),
+            ("sotoju01", "N"),
+            ("devers01", "Y"),
         ],
     )
     con.executemany(
@@ -182,3 +200,22 @@ def test_birth_country_highest_ops_by_season() -> None:
     assert snippet.payload["rows"][0]["player_name"] == "Juan Soto"
     con.close()
 
+
+def test_left_handed_hitter_cohort_resolves() -> None:
+    con = build_test_connection()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which left-handed hitter had the highest OPS in 2024?")
+    assert snippet is not None
+    assert snippet.payload["cohort_kind"] == "bat_handedness"
+    assert snippet.payload["rows"][0]["player_name"] == "Juan Soto"
+    con.close()
+
+
+def test_hall_of_fame_cohort_resolves() -> None:
+    con = build_test_connection()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which Hall of Famer had the highest OPS in 2024?")
+    assert snippet is not None
+    assert snippet.payload["cohort_kind"] == "hall_of_fame"
+    assert snippet.payload["rows"][0]["player_name"] == "Rafael Devers"
+    con.close()

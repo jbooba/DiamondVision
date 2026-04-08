@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import Settings
 from .cohort_metric_leaderboards import CohortMetricLeaderboardResearcher
+from .cohort_timeline import parse_cohort_filter
 from .contextual_performance import ContextualPerformanceResearcher
 from .daily_lookup import DailyLookupResearcher, wants_historical_calendar_day_leaderboard
 from .fielding_bible_search import (
@@ -159,6 +160,7 @@ class BaseballResearchEngine:
         comparison_focused = any(token in question.lower() for token in ("compare", "better than", "worse than", " vs ", " versus ", "how does"))
         yearless_month_day = question_mentions_yearless_month_day(question)
         visual_query = any(token in question.lower() for token in VISUAL_HINTS)
+        cohort_filter_requested = parse_cohort_filter(question) is not None
 
         connection = get_connection(self.settings.database_path)
         initialize_database(connection)
@@ -344,15 +346,16 @@ class BaseballResearchEngine:
             team_history_snippet = self.team_history_researcher.build_snippet(connection, question)
             if team_history_snippet and team_split_history_snippet is None:
                 context.historical_evidence.append(team_history_snippet)
-            season_metric_snippet = self.season_metric_researcher.build_snippet(connection, question)
-            if season_metric_snippet:
-                target_collection = (
-                    context.live_evidence
-                    if season_metric_snippet.payload.get("mode") in {"live", "hybrid"}
-                    else context.historical_evidence
-                )
-                target_collection.append(season_metric_snippet)
-                context.classification = season_metric_snippet.payload.get("mode", context.classification)
+            if not (cohort_filter_requested and cohort_metric_snippet is None):
+                season_metric_snippet = self.season_metric_researcher.build_snippet(connection, question)
+                if season_metric_snippet:
+                    target_collection = (
+                        context.live_evidence
+                        if season_metric_snippet.payload.get("mode") in {"live", "hybrid"}
+                        else context.historical_evidence
+                    )
+                    target_collection.append(season_metric_snippet)
+                    context.classification = season_metric_snippet.payload.get("mode", context.classification)
             statcast_event_snippet = self.statcast_event_researcher.build_snippet(connection, question)
             if statcast_event_snippet:
                 target_collection = (

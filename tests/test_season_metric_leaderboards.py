@@ -57,7 +57,8 @@ def build_test_connection() -> sqlite3.Connection:
             er TEXT,
             hr TEXT,
             bb TEXT,
-            so TEXT
+            so TEXT,
+            hbp TEXT
         )
         """
     )
@@ -105,6 +106,8 @@ def build_test_connection() -> sqlite3.Connection:
         [
             ("alpha01", "Alex", "Alpha"),
             ("bravo01", "Ben", "Bravo"),
+            ("pitch01", "Paula", "Pitcher"),
+            ("pitch02", "Rita", "Rotation"),
         ],
     )
     con.executemany(
@@ -116,6 +119,25 @@ def build_test_connection() -> sqlite3.Connection:
         [
             ("alpha01", "2024", "BOS", "140", "500", "90", "160", "30", "2", "28", "95", "12", "2", "65", "110", "4", "0", "5"),
             ("bravo01", "2024", "NYY", "120", "220", "20", "40", "8", "0", "2", "18", "1", "1", "15", "55", "0", "0", "2"),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO lahman_pitching(
+            playerid, yearid, teamid, w, l, g, gs, sv, ipouts, h, er, hr, bb, so, hbp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("pitch01", "2022", "BOS", "12", "8", "20", "20", "0", "540", "120", "40", "12", "25", "140", "4"),
+            ("pitch01", "2023", "BOS", "13", "9", "24", "24", "0", "621", "135", "48", "15", "30", "155", "3"),
+            ("pitch01", "2024", "BOS", "10", "7", "18", "18", "0", "510", "118", "36", "11", "22", "133", "2"),
+            ("pitch01", "2025", "BOS", "12", "8", "20", "20", "0", "540", "120", "40", "12", "25", "140", "4"),
+            ("pitch01", "2026", "BOS", "2", "1", "3", "3", "0", "81", "16", "7", "2", "5", "20", "1"),
+            ("pitch02", "2022", "BOS", "9", "9", "18", "18", "0", "486", "116", "51", "17", "28", "118", "3"),
+            ("pitch02", "2023", "BOS", "11", "10", "21", "21", "0", "552", "128", "57", "18", "36", "130", "4"),
+            ("pitch02", "2024", "BOS", "10", "11", "17", "17", "0", "447", "110", "52", "19", "24", "99", "2"),
+            ("pitch02", "2025", "BOS", "8", "10", "18", "18", "0", "495", "118", "53", "17", "30", "115", "3"),
+            ("pitch02", "2026", "BOS", "1", "2", "3", "3", "0", "72", "19", "10", "4", "7", "15", "1"),
         ],
     )
     con.executemany(
@@ -208,7 +230,7 @@ def test_provider_pitching_metric_leaderboard_builds() -> None:
 
     def fake_fetch_provider_group_rows(group, column_name, season, qualified_only, cache, *, team_filter=None, minimum_starts=None):
         assert group == "pitching"
-        assert column_name == "FIP"
+        assert column_name == "xFIP"
         assert season == 2024
         assert minimum_starts == 20
         return [
@@ -218,12 +240,39 @@ def test_provider_pitching_metric_leaderboard_builds() -> None:
 
     season_metric_leaderboards.fetch_provider_group_rows = fake_fetch_provider_group_rows
     try:
-        snippet = researcher.build_snippet(con, "which pitcher had the lowest FIP in 2024 with a minimum of 20 starts?")
+        snippet = researcher.build_snippet(con, "which pitcher had the lowest xFIP in 2024 with a minimum of 20 starts?")
     finally:
         season_metric_leaderboards.fetch_provider_group_rows = original
     assert snippet is not None
     assert snippet.payload["source_family"] == "provider"
     assert snippet.payload["rows"][0]["player_name"] == "Ace Example"
+    con.close()
+
+
+def test_historical_pitcher_range_leaderboard_aggregates_last_five_years() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "show me the Red Sox leader in ERA over the last 5 years, with a minimum of 35 starts",
+    )
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["rows"][0]["player_name"] == "Paula Pitcher"
+    assert snippet.payload["rows"][0]["scope_label"] == "2022-2026"
+    con.close()
+
+
+def test_historical_pitcher_range_leaderboard_uses_requested_metric_not_starts() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "show me the Red Sox leader in FIP over the last 5 years, with a minimum of 35 starts",
+    )
+    assert snippet is not None
+    assert snippet.payload["metric"] == "FIP"
+    assert snippet.payload["rows"][0]["player_name"] == "Paula Pitcher"
     con.close()
 
 

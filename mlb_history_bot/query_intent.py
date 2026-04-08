@@ -18,12 +18,8 @@ WORST_HINTS = {
 HIGH_HINTS = {
     "highest",
     "most",
-    "top",
-    "leader",
-    "leaders",
     "biggest",
     "largest",
-    "greatest",
 }
 LOW_HINTS = {
     "lowest",
@@ -31,6 +27,11 @@ LOW_HINTS = {
     "bottom",
     "fewest",
     "smallest",
+}
+NEUTRAL_RANK_HINTS = {
+    "leader",
+    "leaders",
+    "top",
 }
 CURRENT_SCOPE_HINTS = {
     "current",
@@ -74,7 +75,7 @@ def contains_any(lowered_question: str, hints: set[str] | tuple[str, ...]) -> bo
 def has_ranking_hint(lowered_question: str) -> bool:
     return any(
         hint in lowered_question
-        for hint in BEST_HINTS | WORST_HINTS | HIGH_HINTS | LOW_HINTS
+        for hint in BEST_HINTS | WORST_HINTS | HIGH_HINTS | LOW_HINTS | NEUTRAL_RANK_HINTS
     )
 
 
@@ -99,8 +100,9 @@ def detect_ranking_intent(
     wants_low = contains_any(lowered_question, LOW_HINTS)
     wants_best = contains_any(lowered_question, BEST_HINTS)
     wants_worst = contains_any(lowered_question, WORST_HINTS)
+    wants_neutral = contains_any(lowered_question, NEUTRAL_RANK_HINTS)
 
-    if not (wants_high or wants_low or wants_best or wants_worst):
+    if not (wants_high or wants_low or wants_best or wants_worst or wants_neutral):
         if require_hint:
             return None
         return RankingIntent(
@@ -117,6 +119,12 @@ def detect_ranking_intent(
         return RankingIntent(
             descriptor="worst",
             sort_desc=not higher_is_better,
+            matched=True,
+        )
+    if wants_neutral:
+        return RankingIntent(
+            descriptor=fallback_label or ("best" if higher_is_better else "worst"),
+            sort_desc=higher_is_better,
             matched=True,
         )
     return RankingIntent(

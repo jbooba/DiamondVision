@@ -17,8 +17,8 @@ from .provider_metrics import (
 )
 from .pybaseball_adapter import load_team_ids
 from .query_intent import detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
-from .query_utils import extract_minimum_qualifier, extract_referenced_season
-from .storage import table_exists
+from .query_utils import extract_minimum_qualifier, extract_referenced_season, extract_season_span
+from .storage import list_table_columns, table_exists
 from .team_evaluator import safe_float, safe_int
 from .team_season_compare import resolve_team_season_reference
 from .team_season_leaders import (
@@ -42,6 +42,11 @@ HISTORY_HINTS = {
 }
 STATCAST_ERA_HINTS = {"statcast era", "since statcast", "in the statcast era"}
 TEAM_SCOPE_HINTS = ("which team", "what team", "teams had", "team had", "team has")
+QUALIFIER_CLAUSE_PATTERN = re.compile(
+    r"\b(?:with|and)?\s*(?:a\s+)?(?:minimum|min|at\s+least)\s+(?:of\s+)?[a-z0-9-]+(?:\s+[a-z0-9-]+){0,3}\s+"
+    r"(?:starts?|gs|games?|plate\s+appearances|pa|at\s+bats|ab|innings|ip|home\s+runs?|hr|hits?|walks?|strikeouts?|outs?)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -76,6 +81,7 @@ class SeasonMetricQuery:
     team_filter_name: str | None
     provider_group_preference: str | None
     minimum_starts: int | None
+    aggregate_range: bool = False
 
 
 SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
@@ -100,6 +106,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("steals", "SB", ("stolen bases", "stolen base", "steals", "sb"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("hit_by_pitch", "HBP", ("hit by pitch", "hbp"), "historical", "hitter", "player", True, ".0f", "plate_appearances", 5),
     SeasonMetricSpec("era", "ERA", ("era", "earned run average"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
+    SeasonMetricSpec("fip", "FIP", ("fip", "fielding independent pitching"), "historical", "pitcher", "player", False, ".2f", "ipouts", 30),
     SeasonMetricSpec("whip", "WHIP", ("whip",), "historical", "pitcher", "player", False, ".3f", "ipouts", 30),
     SeasonMetricSpec("games", "Games", ("games", "games pitched"), "historical", "pitcher", "player", True, ".0f", "games", 1),
     SeasonMetricSpec("games_started", "GS", ("games started", "starts", "gs"), "historical", "pitcher", "player", True, ".0f", "games", 1),
@@ -233,11 +240,12 @@ class SeasonMetricLeaderboardResearcher:
 
 def parse_season_metric_query(connection, settings: Settings, catalog: MetricCatalog, question: str) -> SeasonMetricQuery | None:
     lowered = f" {question.lower()} "
-    metric = find_season_metric(lowered)
+    metric_search_text = strip_qualifier_clauses(lowered)
+    metric = find_season_metric(metric_search_text)
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
     if metric is None:
-        provider_metric = find_provider_metric(lowered, catalog)
+        provider_metric = find_provider_metric(metric_search_text, catalog)
         if provider_metric is not None:
             metric = build_provider_season_metric_spec(provider_metric, provider_group_preference)
             if provider_group_preference is None:
@@ -249,13 +257,34 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         return None
     if not looks_like_leaderboard_question(lowered):
         return None
-    ranking_intent = detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, fallback_label="leader")
+    ranking_intent = detect_ranking_intent(metric_search_text, higher_is_better=metric.higher_is_better, fallback_label="leader")
     if ranking_intent is None:
         return None
     current_season = settings.live_season or date.today().year
-    start_season, end_season, scope_label = resolve_season_scope(question, current_season, metric.source_family)
+    start_season, end_season, scope_label, aggregate_range = resolve_season_scope(question, current_season, metric.source_family)
     if start_season is None or end_season is None:
         return None
+    if aggregate_range and metric.source_family == "provider":
+        historical_fallback = build_source_fallback_query(
+            SeasonMetricQuery(
+                metric=metric,
+                descriptor=ranking_intent.descriptor,
+                sort_desc=ranking_intent.sort_desc,
+                entity_scope="player",
+                role=metric.role,
+                start_season=start_season,
+                end_season=end_season,
+                scope_label=scope_label,
+                team_filter_code=None,
+                team_filter_name=None,
+                provider_group_preference=provider_group_preference,
+                minimum_starts=minimum_starts,
+                aggregate_range=aggregate_range,
+            ),
+            "historical",
+        )
+        if historical_fallback is not None:
+            metric = historical_fallback.metric
     explicit_team_scope = any(token in lowered for token in TEAM_SCOPE_HINTS)
     if explicit_team_scope and metric.entity_scope != "team" and not metric_supports_team_scope(metric):
         return None
@@ -278,6 +307,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         team_filter_name=team_filter_name,
         provider_group_preference=provider_group_preference,
         minimum_starts=minimum_starts,
+        aggregate_range=aggregate_range,
     )
 
 
@@ -303,23 +333,32 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
     return best_match[1] if best_match else None
 
 
-def resolve_season_scope(question: str, current_season: int, source_family: str) -> tuple[int | None, int | None, str]:
+def strip_qualifier_clauses(lowered_question: str) -> str:
+    return QUALIFIER_CLAUSE_PATTERN.sub(" ", lowered_question)
+
+
+def resolve_season_scope(question: str, current_season: int, source_family: str) -> tuple[int | None, int | None, str, bool]:
     lowered = question.lower()
+    span = extract_season_span(question, current_season)
+    if span is not None:
+        if source_family == "statcast" and span.start_season < 2015:
+            return 2015, span.end_season, f"2015-{span.end_season}", True
+        return span.start_season, span.end_season, span.label, span.aggregate
     referenced = extract_referenced_season(question, current_season)
     if referenced is not None:
-        return referenced, referenced, str(referenced)
+        return referenced, referenced, str(referenced), False
     if source_family == "provider":
         if any(token in lowered for token in HISTORY_HINTS):
-            return None, None, ""
-        return current_season, current_season, str(current_season)
+            return None, None, "", False
+        return current_season, current_season, str(current_season), False
     if any(token in lowered for token in STATCAST_ERA_HINTS) and source_family == "statcast":
-        return 2015, current_season, "Statcast era"
+        return 2015, current_season, "Statcast era", True
     if any(token in lowered for token in HISTORY_HINTS):
         start = 2015 if source_family == "statcast" else 1871
-        return start, current_season, "Statcast era" if source_family == "statcast" else "MLB history"
+        return start, current_season, "Statcast era" if source_family == "statcast" else "MLB history", False
     if source_family == "statcast" and mentions_current_scope(lowered):
-        return current_season, current_season, str(current_season)
-    return None, None, ""
+        return current_season, current_season, str(current_season), False
+    return None, None, "", False
 
 
 def build_provider_season_metric_spec(metric: ProviderMetricSpec, group_preference: str | None) -> SeasonMetricSpec:
@@ -398,6 +437,7 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
         team_filter_name=query.team_filter_name,
         provider_group_preference=query.provider_group_preference,
         minimum_starts=query.minimum_starts,
+        aggregate_range=query.aggregate_range,
     )
 
 
@@ -468,10 +508,16 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
     if query.team_filter_code:
         team_filter_sql = "AND upper(b.teamid) = ?"
         parameters.append(query.team_filter_code.upper())
+    season_select = (
+        "MIN(CAST(b.yearid AS INTEGER)) AS start_season, MAX(CAST(b.yearid AS INTEGER)) AS end_season,"
+        if query.aggregate_range
+        else "CAST(b.yearid AS INTEGER) AS season,"
+    )
+    season_group = "" if query.aggregate_range else "CAST(b.yearid AS INTEGER), "
     rows = connection.execute(
         f"""
         SELECT
-            CAST(b.yearid AS INTEGER) AS season,
+            {season_select}
             b.playerid,
             p.namefirst,
             p.namelast,
@@ -496,7 +542,7 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
           ON p.playerid = b.playerid
         WHERE CAST(b.yearid AS INTEGER) BETWEEN ? AND ?
           {team_filter_sql}
-        GROUP BY CAST(b.yearid AS INTEGER), b.playerid, p.namefirst, p.namelast
+        GROUP BY {season_group} b.playerid, p.namefirst, p.namelast
         """,
         tuple(parameters),
     ).fetchall()
@@ -525,9 +571,13 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
         metric_value = select_historical_hitting_metric(query.metric.key, at_bats, plate_appearances, avg, obp, slg, ops, row)
         if metric_value is None:
             continue
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
@@ -560,15 +610,27 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
 def fetch_historical_pitcher_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
     if not (table_exists(connection, "lahman_pitching") and table_exists(connection, "lahman_people")):
         return []
+    pitching_columns = {column.lower() for column in list_table_columns(connection, "lahman_pitching")}
+    hbp_select = (
+        "SUM(CAST(COALESCE(pch.hbp, '0') AS INTEGER)) AS hit_by_pitch,"
+        if "hbp" in pitching_columns
+        else "0 AS hit_by_pitch,"
+    )
     parameters: list[Any] = [query.start_season, query.end_season]
     team_filter_sql = ""
     if query.team_filter_code:
         team_filter_sql = "AND upper(pch.teamid) = ?"
         parameters.append(query.team_filter_code.upper())
+    season_select = (
+        "MIN(CAST(pch.yearid AS INTEGER)) AS start_season, MAX(CAST(pch.yearid AS INTEGER)) AS end_season,"
+        if query.aggregate_range
+        else "CAST(pch.yearid AS INTEGER) AS season,"
+    )
+    season_group = "" if query.aggregate_range else "CAST(pch.yearid AS INTEGER), "
     rows = connection.execute(
         f"""
         SELECT
-            CAST(pch.yearid AS INTEGER) AS season,
+            {season_select}
             pch.playerid,
             ppl.namefirst,
             ppl.namelast,
@@ -583,44 +645,55 @@ def fetch_historical_pitcher_rows(connection, query: SeasonMetricQuery) -> list[
             SUM(CAST(COALESCE(pch.er, '0') AS INTEGER)) AS earned_runs,
             SUM(CAST(COALESCE(pch.hr, '0') AS INTEGER)) AS home_runs_allowed,
             SUM(CAST(COALESCE(pch.bb, '0') AS INTEGER)) AS walks,
+            {hbp_select}
             SUM(CAST(COALESCE(pch.so, '0') AS INTEGER)) AS strikeouts
         FROM lahman_pitching AS pch
         JOIN lahman_people AS ppl
           ON ppl.playerid = pch.playerid
         WHERE CAST(pch.yearid AS INTEGER) BETWEEN ? AND ?
           {team_filter_sql}
-        GROUP BY CAST(pch.yearid AS INTEGER), pch.playerid, ppl.namefirst, ppl.namelast
+        GROUP BY {season_group} pch.playerid, ppl.namefirst, ppl.namelast
         """,
         tuple(parameters),
     ).fetchall()
+    fip_constant = compute_historical_fip_constant(connection, query.start_season, query.end_season)
     candidates: list[dict[str, Any]] = []
     for row in rows:
         ipouts = safe_int(row["ipouts"]) or 0
         if not passes_sample_threshold(query.metric, {"ipouts": ipouts, "games": safe_int(row["games"]) or 0}):
             continue
-        metric_value = select_historical_pitching_metric(query.metric.key, ipouts, row)
+        games_started = safe_int(row["games_started"]) or 0
+        if query.minimum_starts is not None and games_started < query.minimum_starts:
+            continue
+        metric_value = select_historical_pitching_metric(query.metric.key, ipouts, row, fip_constant=fip_constant)
         if metric_value is None:
             continue
         hits_allowed = safe_int(row["hits_allowed"]) or 0
         walks = safe_int(row["walks"]) or 0
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
                 "sample_size": ipouts,
                 "games": safe_int(row["games"]) or 0,
                 "innings": outs_to_innings_notation(ipouts),
-                "games_started": safe_int(row["games_started"]) or 0,
+                "games_started": games_started,
                 "era": (27.0 * (safe_int(row["earned_runs"]) or 0) / ipouts) if ipouts else None,
                 "whip": ((hits_allowed + walks) / (ipouts / 3.0)) if ipouts else None,
+                "fip": metric_value if query.metric.key == "fip" else select_historical_pitching_metric("fip", ipouts, row, fip_constant=fip_constant),
                 "wins": safe_int(row["wins"]) or 0,
                 "losses": safe_int(row["losses"]) or 0,
                 "saves": safe_int(row["saves"]) or 0,
                 "hits_allowed": hits_allowed,
                 "earned_runs": safe_int(row["earned_runs"]) or 0,
                 "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
+                "hit_by_pitch": safe_int(row["hit_by_pitch"]) or 0,
                 "walks": walks,
                 "strikeouts": safe_int(row["strikeouts"]) or 0,
                 "strikeouts_per_9": ((27.0 * (safe_int(row["strikeouts"]) or 0)) / ipouts) if ipouts else None,
@@ -641,10 +714,16 @@ def fetch_historical_fielder_rows(connection, query: SeasonMetricQuery) -> list[
     if query.team_filter_code:
         team_filter_sql = "AND upper(fld.teamid) = ?"
         parameters.append(query.team_filter_code.upper())
+    season_select = (
+        "MIN(CAST(fld.yearid AS INTEGER)) AS start_season, MAX(CAST(fld.yearid AS INTEGER)) AS end_season,"
+        if query.aggregate_range
+        else "CAST(fld.yearid AS INTEGER) AS season,"
+    )
+    season_group = "" if query.aggregate_range else "CAST(fld.yearid AS INTEGER), "
     rows = connection.execute(
         f"""
         SELECT
-            CAST(fld.yearid AS INTEGER) AS season,
+            {season_select}
             fld.playerid,
             ppl.namefirst,
             ppl.namelast,
@@ -659,7 +738,7 @@ def fetch_historical_fielder_rows(connection, query: SeasonMetricQuery) -> list[
           ON ppl.playerid = fld.playerid
         WHERE CAST(fld.yearid AS INTEGER) BETWEEN ? AND ?
           {team_filter_sql}
-        GROUP BY CAST(fld.yearid AS INTEGER), fld.playerid, ppl.namefirst, ppl.namelast
+        GROUP BY {season_group} fld.playerid, ppl.namefirst, ppl.namelast
         """,
         tuple(parameters),
     ).fetchall()
@@ -676,9 +755,13 @@ def fetch_historical_fielder_rows(connection, query: SeasonMetricQuery) -> list[
         metric_value = select_historical_fielding_metric(query.metric.key, fielding_pct, row)
         if metric_value is None:
             continue
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
@@ -697,29 +780,36 @@ def fetch_historical_fielder_rows(connection, query: SeasonMetricQuery) -> list[
 def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
     if not table_exists(connection, "lahman_teams"):
         return []
+    season_select = (
+        "MIN(CAST(yearid AS INTEGER)) AS start_season, MAX(CAST(yearid AS INTEGER)) AS end_season,"
+        if query.aggregate_range
+        else "CAST(yearid AS INTEGER) AS season,"
+    )
+    season_group = "teamid, name" if query.aggregate_range else "CAST(yearid AS INTEGER), teamid, name"
     rows = connection.execute(
-        """
+        f"""
         SELECT
-            CAST(yearid AS INTEGER) AS season,
+            {season_select}
             teamid,
-            g,
-            w,
-            l,
-            r,
-            ab,
-            h,
-            c_2b,
-            c_3b,
-            hr,
-            bb,
-            hbp,
-            sf,
-            ra,
-            era,
-            fp,
+            SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS g,
+            SUM(CAST(COALESCE(w, '0') AS INTEGER)) AS w,
+            SUM(CAST(COALESCE(l, '0') AS INTEGER)) AS l,
+            SUM(CAST(COALESCE(r, '0') AS INTEGER)) AS r,
+            SUM(CAST(COALESCE(ab, '0') AS INTEGER)) AS ab,
+            SUM(CAST(COALESCE(h, '0') AS INTEGER)) AS h,
+            SUM(CAST(COALESCE(c_2b, '0') AS INTEGER)) AS c_2b,
+            SUM(CAST(COALESCE(c_3b, '0') AS INTEGER)) AS c_3b,
+            SUM(CAST(COALESCE(hr, '0') AS INTEGER)) AS hr,
+            SUM(CAST(COALESCE(bb, '0') AS INTEGER)) AS bb,
+            SUM(CAST(COALESCE(hbp, '0') AS INTEGER)) AS hbp,
+            SUM(CAST(COALESCE(sf, '0') AS INTEGER)) AS sf,
+            SUM(CAST(COALESCE(ra, '0') AS INTEGER)) AS ra,
+            AVG(CAST(NULLIF(era, '') AS REAL)) AS era,
+            AVG(CAST(NULLIF(fp, '') AS REAL)) AS fp,
             name
         FROM lahman_teams
         WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+        GROUP BY {season_group}
         """,
         (query.start_season, query.end_season),
     ).fetchall()
@@ -763,9 +853,13 @@ def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dic
         }.get(query.metric.key)
         if metric_value is None:
             continue
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "team_name": str(row["name"] or row["teamid"] or ""),
                 "team": str(row["teamid"] or ""),
                 "metric_value": float(metric_value),
@@ -864,10 +958,16 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
     if query.team_filter_code:
         team_filter_sql = "AND upper(team) = ?"
         parameters.append(query.team_filter_code.upper())
+    season_select = (
+        "MIN(season) AS start_season, MAX(season) AS end_season,"
+        if query.aggregate_range
+        else "season,"
+    )
+    season_group = "batter_id" if query.aggregate_range else "season, batter_id"
     rows = connection.execute(
         f"""
         SELECT
-            season,
+            {season_select}
             batter_id,
             MIN(batter_name) AS player_name,
             CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
@@ -896,7 +996,7 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
         FROM statcast_batter_games
         WHERE season BETWEEN ? AND ?
           {team_filter_sql}
-        GROUP BY season, batter_id
+        GROUP BY {season_group}
         """,
         tuple(parameters),
     ).fetchall()
@@ -908,9 +1008,13 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
         metric_value = metrics.get(query.metric.key)
         if metric_value is None:
             continue
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "player_name": str(row["player_name"] or ""),
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
@@ -946,10 +1050,16 @@ def fetch_statcast_batter_rows(connection, query: SeasonMetricQuery) -> list[dic
 def fetch_statcast_team_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
     if not table_exists(connection, "statcast_team_games"):
         return []
+    season_select = (
+        "MIN(season) AS start_season, MAX(season) AS end_season,"
+        if query.aggregate_range
+        else "season,"
+    )
+    season_group = "team" if query.aggregate_range else "season, team"
     rows = connection.execute(
-        """
+        f"""
         SELECT
-            season,
+            {season_select}
             team,
             MIN(team_name) AS team_name,
             COUNT(*) AS games,
@@ -968,7 +1078,7 @@ def fetch_statcast_team_rows(connection, query: SeasonMetricQuery) -> list[dict[
             SUM(launch_speed_count) AS launch_speed_count
         FROM statcast_team_games
         WHERE season BETWEEN ? AND ?
-        GROUP BY season, team
+        GROUP BY {season_group}
         """,
         (query.start_season, query.end_season),
     ).fetchall()
@@ -980,9 +1090,13 @@ def fetch_statcast_team_rows(connection, query: SeasonMetricQuery) -> list[dict[
         metric_value = metrics.get(query.metric.key)
         if metric_value is None:
             continue
+        scope_start, scope_end, scope_text = row_scope(row)
         candidates.append(
             {
-                "season": safe_int(row["season"]) or 0,
+                "season": scope_end,
+                "scope_label": scope_text,
+                "scope_start_season": scope_start,
+                "scope_end_season": scope_end,
                 "team_name": str(row["team_name"] or row["team"] or ""),
                 "team": str(row["team"] or ""),
                 "metric_value": float(metric_value),
@@ -1074,6 +1188,59 @@ def statcast_team_metric_values(row) -> dict[str, float | None]:
     }
 
 
+def row_scope(row) -> tuple[int, int, str]:
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    start_season = safe_int(row["start_season"]) if "start_season" in keys else None
+    end_season = safe_int(row["end_season"]) if "end_season" in keys else None
+    if start_season is not None and end_season is not None:
+        if start_season == end_season:
+            return start_season, end_season, str(end_season)
+        return start_season, end_season, f"{start_season}-{end_season}"
+    season = safe_int(row["season"]) or 0
+    return season, season, str(season)
+
+
+def compute_historical_fip_constant(connection, start_season: int, end_season: int) -> float | None:
+    if not table_exists(connection, "lahman_pitching"):
+        return None
+    pitching_columns = {column.lower() for column in list_table_columns(connection, "lahman_pitching")}
+    hbp_select = (
+        "SUM(CAST(COALESCE(hbp, '0') AS INTEGER)) AS hit_by_pitch"
+        if "hbp" in pitching_columns
+        else "0 AS hit_by_pitch"
+    )
+    row = connection.execute(
+        f"""
+        SELECT
+            SUM(CAST(COALESCE(ipouts, '0') AS INTEGER)) AS ipouts,
+            SUM(CAST(COALESCE(er, '0') AS INTEGER)) AS earned_runs,
+            SUM(CAST(COALESCE(hr, '0') AS INTEGER)) AS home_runs_allowed,
+            SUM(CAST(COALESCE(bb, '0') AS INTEGER)) AS walks,
+            {hbp_select},
+            SUM(CAST(COALESCE(so, '0') AS INTEGER)) AS strikeouts
+        FROM lahman_pitching
+        WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+        """,
+        (start_season, end_season),
+    ).fetchone()
+    if row is None:
+        return None
+    ipouts = safe_int(row["ipouts"]) or 0
+    if ipouts <= 0:
+        return None
+    earned_runs = safe_int(row["earned_runs"]) or 0
+    home_runs_allowed = safe_int(row["home_runs_allowed"]) or 0
+    walks = safe_int(row["walks"]) or 0
+    hit_by_pitch = safe_int(row["hit_by_pitch"]) or 0
+    strikeouts = safe_int(row["strikeouts"]) or 0
+    innings_pitched = ipouts / 3.0
+    league_era = (earned_runs * 9.0 / innings_pitched) if innings_pitched else None
+    if league_era is None:
+        return None
+    component = ((13.0 * home_runs_allowed) + (3.0 * (walks + hit_by_pitch)) - (2.0 * strikeouts)) / innings_pitched
+    return league_era - component
+
+
 def passes_sample_threshold(metric: SeasonMetricSpec, values: dict[str, float | int | None]) -> bool:
     if metric.sample_basis is None or metric.min_sample_size <= 0:
         return True
@@ -1090,7 +1257,7 @@ def rank_rows(rows: list[dict[str, Any]], query: SeasonMetricQuery) -> list[dict
         key=lambda row: (
             -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
             -(row.get("sample_size") or 0.0),
-            int(row.get("season") or 0),
+            int(row.get("scope_end_season") or row.get("season") or 0),
             str(row.get("player_name") or row.get("team_name") or ""),
         )
     )
@@ -1105,17 +1272,23 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
     value_text = f"{float(leader['metric_value']):{query.metric.formatter}}"
     filter_text = f" for {query.team_filter_name}" if query.team_filter_name else ""
     subject_phrase = "team" if query.entity_scope == "team" else query.role
+    leader_scope = str(leader.get("scope_label") or leader.get("season") or "")
+    scope_parenthetical = f" ({leader_scope})" if leader_scope and not query.aggregate_range else ""
     summary = (
         f"For {query.scope_label}{filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
-        f"is {subject_label} ({leader.get('season')}) at {value_text}."
+        f"is {subject_label}{scope_parenthetical} at {value_text}."
     )
     trailing = rows[1:4]
     if trailing:
-        summary = f"{summary} Next on the board: " + "; ".join(
-            f"{(row.get('player_name') or row.get('team_name') or 'Unknown')} ({row.get('season')}) "
-            f"{float(row['metric_value']):{query.metric.formatter}}"
-            for row in trailing
-        ) + "."
+        parts: list[str] = []
+        for row in trailing:
+            row_label = row.get("player_name") or row.get("team_name") or "Unknown"
+            row_scope = row.get("scope_label") or row.get("season")
+            row_scope_text = f" ({row_scope})" if row_scope and not query.aggregate_range else ""
+            parts.append(
+                f"{row_label}{row_scope_text} {float(row['metric_value']):{query.metric.formatter}}"
+            )
+        summary = f"{summary} Next on the board: " + "; ".join(parts) + "."
     return summary
 
 
