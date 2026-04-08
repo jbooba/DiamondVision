@@ -505,6 +505,11 @@ def build_statcast_event_identity_filter(cohort: ResolvedCohort) -> tuple[str | 
     if cohort.kind == "manager_era" and cohort.team_code:
         clauses.append("upper(batting_team) = ?")
         parameters.append(str(cohort.team_code).strip().upper())
+    stand_filter = normalize_statcast_stand_filter(cohort.bats_filter)
+    if stand_filter:
+        placeholders = ", ".join("?" for _ in stand_filter)
+        clauses.append(f"upper(stand) IN ({placeholders})")
+        parameters.extend(stand_filter)
     player_names = sorted({name.strip().lower() for name in (cohort.player_names or set()) if str(name).strip()})
     if player_names:
         placeholders = ", ".join("?" for _ in player_names)
@@ -513,6 +518,19 @@ def build_statcast_event_identity_filter(cohort: ResolvedCohort) -> tuple[str | 
     if not clauses:
         return None, tuple()
     return "(" + " OR ".join(clauses) + ")", tuple(parameters)
+
+
+def normalize_statcast_stand_filter(bats_filter: tuple[str, ...] | None) -> tuple[str, ...]:
+    if not bats_filter:
+        return tuple()
+    values: list[str] = []
+    for code in bats_filter:
+        normalized = str(code or "").strip().upper()
+        if normalized in {"B", "S"}:
+            normalized = "S"
+        if normalized in {"L", "R", "S"} and normalized not in values:
+            values.append(normalized)
+    return tuple(values)
 
 
 def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:

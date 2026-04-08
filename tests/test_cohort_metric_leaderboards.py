@@ -367,6 +367,125 @@ def test_switch_hitter_statcast_cohort_falls_back_to_statcast_events() -> None:
     con.close()
 
 
+def test_switch_hitter_statcast_cohort_uses_statcast_stand_filter_when_names_do_not_match() -> None:
+    con = build_test_connection()
+    con.execute("DELETE FROM statcast_batter_games")
+    jose_rows = [
+        (
+            2021,
+            "2021-07-01",
+            102,
+            at_bat_number,
+            3,
+            608070,
+            "J. Ramirez",
+            1,
+            "Pitcher A",
+            "CLE",
+            "DET",
+            "CLE",
+            "DET",
+            "S",
+            "R",
+            "FF",
+            "4-Seam Fastball",
+            "fastball",
+            "single",
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            "1-1",
+            1,
+            0,
+            "middle",
+            "middle",
+            "center",
+            95.0,
+            2300.0,
+            108.0 + (at_bat_number % 2),
+            18.0,
+            402.0,
+            74.0,
+            0.88,
+            0.91,
+            1.20,
+        )
+        for at_bat_number in range(1, 11)
+    ]
+    soto_rows = [
+        (
+            2021,
+            "2021-07-02",
+            103,
+            at_bat_number,
+            2,
+            665742,
+            "Juan Soto",
+            2,
+            "Pitcher B",
+            "WSN",
+            "ATL",
+            "WSN",
+            "ATL",
+            "L",
+            "R",
+            "FF",
+            "4-Seam Fastball",
+            "fastball",
+            "single",
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            "0-1",
+            0,
+            0,
+            "middle",
+            "middle",
+            "center",
+            94.1,
+            2250.0,
+            101.0,
+            14.0,
+            370.0,
+            72.0,
+            0.80,
+            0.82,
+            1.05,
+        )
+        for at_bat_number in range(1, 11)
+    ]
+    con.executemany(
+        """
+        INSERT INTO statcast_events(
+            season, game_date, game_pk, at_bat_number, pitch_number, batter_id, batter_name, pitcher_id, pitcher_name,
+            batting_team, pitching_team, home_team, away_team, stand, p_throws, pitch_type, pitch_name, pitch_family,
+            event, is_ab, is_hit, is_xbh, is_home_run, is_strikeout, has_risp, balls, strikes, count_key,
+            outs_when_up, runs_batted_in, horizontal_location, vertical_location, field_direction, release_speed,
+            release_spin_rate, launch_speed, launch_angle, hit_distance, bat_speed, estimated_ba, estimated_woba,
+            estimated_slg
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        jose_rows + soto_rows,
+    )
+    con.commit()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "Which switch hitter had the highest average EV in 2021?")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "statcast"
+    assert snippet.payload["rows"][0]["player_name"] == "J. Ramirez"
+    con.close()
+
+
 def test_switch_hitter_statcast_cohort_reports_local_gap_when_no_statcast_rows() -> None:
     con = build_test_connection()
     con.execute("DELETE FROM statcast_batter_games")
