@@ -9,13 +9,18 @@ from .config import Settings
 from .models import EvidenceSnippet
 from .query_intent import looks_like_leaderboard_question
 from .query_utils import extract_minimum_qualifier
-from .season_metric_leaderboards import SeasonMetricSpec, find_season_metric
-from .storage import table_exists
+from .season_metric_leaderboards import SEASON_METRICS, SeasonMetricSpec, normalize_metric_search_text, strip_qualifier_clauses
+from .storage import list_table_columns, table_exists
 from .team_season_leaders import build_person_name
 
 
 TEAM_SPAN_PATTERN = re.compile(
     r"\b(?:for|on)\s+the\s+(?P<label>most|fewest|least|lowest|highest)\s+teams\b",
+    re.IGNORECASE,
+)
+APPEARANCE_PATTERN = re.compile(
+    r"\b(?:appeared?|appearance|played|play|logged)\b.*\b(?:game|games)\b"
+    r"|\bplayed\s+for\s+the\s+(?:most|fewest|least|lowest|highest)\s+teams\b",
     re.IGNORECASE,
 )
 TEAM_COUNT_COLUMN_MAP: dict[tuple[str, str], tuple[str, str, str]] = {
@@ -39,7 +44,7 @@ class PlayerTeamSpanQuery:
     metric: SeasonMetricSpec
     descriptor: str
     sort_desc: bool
-    table_name: str
+    table_name: str | None
     value_column: str
     value_label: str
     minimum_total: int | None
@@ -80,12 +85,19 @@ def parse_player_team_span_query(connection, question: str) -> PlayerTeamSpanQue
     team_span_match = TEAM_SPAN_PATTERN.search(lowered)
     if team_span_match is None or not looks_like_leaderboard_question(lowered):
         return None
-    metric = find_season_metric(lowered)
-    if metric is None or metric.source_family != "historical" or metric.entity_scope != "player":
-        return None
-    column_metadata = TEAM_COUNT_COLUMN_MAP.get((metric.role, metric.key))
-    if column_metadata is None:
-        return None
+    appearance_requested = bool(APPEARANCE_PATTERN.search(lowered))
+    metric = find_player_team_span_metric(lowered)
+    if appearance_requested:
+        metric = build_appearance_metric()
+        column_metadata: tuple[str | None, str, str] = (None, "games", "G")
+    else:
+        if metric is None or metric.source_family != "historical" or metric.entity_scope != "player":
+            return None
+        mapped = TEAM_COUNT_COLUMN_MAP.get((metric.role, metric.key))
+        if mapped is None:
+            return None
+        table_name, value_column, value_label = mapped
+        column_metadata = (table_name, value_column, value_label)
     label = team_span_match.group("label").lower()
     descriptor = "fewest" if label in {"fewest", "least", "lowest"} else "most"
     sort_desc = descriptor == "most"
@@ -110,7 +122,9 @@ def parse_player_team_span_query(connection, question: str) -> PlayerTeamSpanQue
 
 
 def fetch_player_team_span_rows(connection, query: PlayerTeamSpanQuery) -> list[dict[str, Any]]:
-    if not (table_exists(connection, query.table_name) and table_exists(connection, "lahman_people")):
+    if query.value_column == "games":
+        return fetch_player_team_appearance_rows(connection, query)
+    if not query.table_name or not (table_exists(connection, query.table_name) and table_exists(connection, "lahman_people")):
         return []
     value_expr = f"SUM(CAST(COALESCE(stats.{query.value_column}, '0') AS INTEGER))"
     where_clause, parameters = build_cohort_where_clause(query.cohort)
@@ -130,6 +144,115 @@ def fetch_player_team_span_rows(connection, query: PlayerTeamSpanQuery) -> list[
               ON ppl.playerid = stats.playerid
             WHERE {where_clause}
             GROUP BY stats.playerid, ppl.namefirst, ppl.namelast, stats.teamid
+        )
+        SELECT
+            playerid,
+            namefirst,
+            namelast,
+            COUNT(*) AS team_count,
+            SUM(metric_total) AS metric_total,
+            MIN(first_team_season) AS first_season,
+            MAX(last_team_season) AS last_season,
+            GROUP_CONCAT(teamid, ', ') AS teams
+        FROM player_team_totals
+        WHERE metric_total > 0
+        GROUP BY playerid, namefirst, namelast
+        """,
+        parameters,
+    ).fetchall()
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        metric_total = int(row["metric_total"] or 0)
+        if query.minimum_total is not None and metric_total < query.minimum_total:
+            continue
+        candidates.append(
+            {
+                "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
+                "team_count": int(row["team_count"] or 0),
+                "metric_total": metric_total,
+                "first_season": int(row["first_season"] or 0),
+                "last_season": int(row["last_season"] or 0),
+                "teams": str(row["teams"] or ""),
+            }
+        )
+    candidates.sort(
+        key=lambda row: (
+            -int(row["team_count"]) if query.sort_desc else int(row["team_count"]),
+            -int(row["metric_total"]) if query.sort_desc else int(row["metric_total"]),
+            str(row["player_name"]),
+        )
+    )
+    for index, row in enumerate(candidates, start=1):
+        row["rank"] = index
+    return candidates
+
+
+def fetch_player_team_appearance_rows(connection, query: PlayerTeamSpanQuery) -> list[dict[str, Any]]:
+    if not table_exists(connection, "lahman_people"):
+        return []
+    batting_columns = {column.lower() for column in list_table_columns(connection, "lahman_batting")} if table_exists(connection, "lahman_batting") else set()
+    pitching_columns = {column.lower() for column in list_table_columns(connection, "lahman_pitching")} if table_exists(connection, "lahman_pitching") else set()
+    fielding_columns = {column.lower() for column in list_table_columns(connection, "lahman_fielding")} if table_exists(connection, "lahman_fielding") else set()
+    batting_sql = (
+        """
+        SELECT playerid, teamid, CAST(yearid AS INTEGER) AS yearid, SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS games
+        FROM lahman_batting
+        GROUP BY playerid, teamid, CAST(yearid AS INTEGER)
+        """
+        if "g" in batting_columns
+        else None
+    )
+    pitching_sql = (
+        """
+        SELECT playerid, teamid, CAST(yearid AS INTEGER) AS yearid, SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS games
+        FROM lahman_pitching
+        GROUP BY playerid, teamid, CAST(yearid AS INTEGER)
+        """
+        if "g" in pitching_columns
+        else None
+    )
+    fielding_sql = (
+        """
+        SELECT playerid, teamid, CAST(yearid AS INTEGER) AS yearid, MAX(CAST(COALESCE(g, '0') AS INTEGER)) AS games
+        FROM lahman_fielding
+        GROUP BY playerid, teamid, CAST(yearid AS INTEGER)
+        """
+        if "g" in fielding_columns
+        else None
+    )
+    source_queries = [part for part in (batting_sql, pitching_sql, fielding_sql) if part]
+    if not source_queries:
+        return []
+    union_sql = "\nUNION ALL\n".join(source_queries)
+    where_clause, parameters = build_cohort_where_clause(query.cohort)
+    rows = connection.execute(
+        f"""
+        WITH source_games AS (
+            {union_sql}
+        ),
+        player_team_year_games AS (
+            SELECT
+                sg.playerid,
+                sg.teamid,
+                sg.yearid,
+                MAX(sg.games) AS games
+            FROM source_games AS sg
+            GROUP BY sg.playerid, sg.teamid, sg.yearid
+        ),
+        player_team_totals AS (
+            SELECT
+                pty.playerid,
+                ppl.namefirst,
+                ppl.namelast,
+                pty.teamid,
+                MIN(pty.yearid) AS first_team_season,
+                MAX(pty.yearid) AS last_team_season,
+                SUM(pty.games) AS metric_total
+            FROM player_team_year_games AS pty
+            JOIN lahman_people AS ppl
+              ON ppl.playerid = pty.playerid
+            WHERE {where_clause}
+            GROUP BY pty.playerid, ppl.namefirst, ppl.namelast, pty.teamid
         )
         SELECT
             playerid,
@@ -214,5 +337,49 @@ def build_player_team_span_summary(
 
 
 def build_player_team_span_citation(query: PlayerTeamSpanQuery) -> str:
+    if query.value_column == "games":
+        return "Player team spans derived from Lahman batting, pitching, and fielding game logs"
     prefix = f"{query.cohort.label} " if query.cohort else ""
     return f"{prefix}{query.metric.label} by team from Lahman batting/pitching tables"
+
+
+def build_appearance_metric() -> SeasonMetricSpec:
+    return SeasonMetricSpec(
+        key="games",
+        label="Games",
+        aliases=(
+            "games",
+            "games played",
+            "appeared in a game",
+            "appeared in games",
+            "played in a game",
+            "played in games",
+            "game appearances",
+        ),
+        source_family="historical",
+        role="player",
+        entity_scope="player",
+        higher_is_better=True,
+        formatter=".0f",
+        sample_basis="games",
+        min_sample_size=1,
+    )
+
+
+def find_player_team_span_metric(lowered_question: str) -> SeasonMetricSpec | None:
+    normalized = normalize_metric_search_text(strip_qualifier_clauses(lowered_question))
+    best_match: tuple[int, SeasonMetricSpec] | None = None
+    for metric in SEASON_METRICS:
+        if metric.source_family != "historical" or metric.entity_scope != "player":
+            continue
+        for alias in metric.aliases:
+            alias_lower = alias.lower().strip()
+            if not alias_lower:
+                continue
+            pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+            if re.search(pattern, normalized) is None:
+                continue
+            score = len(alias_lower)
+            if best_match is None or score > best_match[0]:
+                best_match = (score, metric)
+    return best_match[1] if best_match else None
