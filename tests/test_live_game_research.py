@@ -4,6 +4,7 @@ from pathlib import Path
 
 from mlb_history_bot.config import Settings
 from mlb_history_bot.live_game_research import LiveGameResearcher
+from mlb_history_bot.sporty_video import SportyVideoPage
 
 
 def build_test_settings() -> Settings:
@@ -98,15 +99,55 @@ class FakeLiveClient:
         }
 
 
+class FakeSportyVideoClient:
+    def fetch(self, play_id: str):
+        if play_id == "score-play-1":
+            return SportyVideoPage(
+                play_id=play_id,
+                title="Corbin Carroll RBI single",
+                savant_url=f"https://baseballsavant.mlb.com/sporty-videos?playId={play_id}",
+                mp4_url="https://example.com/score-play-1.mp4",
+                batter="Corbin Carroll",
+                pitcher="David Peterson",
+                exit_velocity=101.2,
+                launch_angle=12.0,
+                hit_distance=None,
+                hr_parks=None,
+                matchup="ARI @ NYM",
+                page_date="2026-04-08",
+            )
+        if play_id == "score-play-2":
+            return SportyVideoPage(
+                play_id=play_id,
+                title="Eugenio Suarez belts a 3-run homer",
+                savant_url=f"https://baseballsavant.mlb.com/sporty-videos?playId={play_id}",
+                mp4_url="https://example.com/score-play-2.mp4",
+                batter="Eugenio Suarez",
+                pitcher="David Peterson",
+                exit_velocity=106.4,
+                launch_angle=28.0,
+                hit_distance=414.0,
+                hr_parks=28,
+                matchup="ARI @ NYM",
+                page_date="2026-04-08",
+            )
+        return None
+
+
 def test_live_game_research_defaults_scoring_breakdown_queries_to_today() -> None:
     researcher = LiveGameResearcher(build_test_settings())
     researcher.live_client = FakeLiveClient()
+    researcher.sporty_video_client = FakeSportyVideoClient()
 
     snippet = researcher.build_snippet("how did Arizona score their runs?")
 
     assert snippet is not None
     assert snippet.source == "Live Game Research"
     assert "Scoring plays for Diamondbacks" in snippet.summary
+    assert "Loaded 2 scoring-play clip(s)" in snippet.summary
     assert "Corbin Carroll singles" in snippet.summary
     assert "Eugenio Suarez hits a 3-run home run" in snippet.summary
     assert len(snippet.payload["scoring_plays"]) == 2
+    assert len(snippet.payload["clips"]) == 2
+    assert snippet.payload["clips"][0]["mp4_url"] == "https://example.com/score-play-1.mp4"
+    assert snippet.payload["clips"][1]["hr_parks"] == 28

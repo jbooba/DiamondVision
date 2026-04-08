@@ -85,7 +85,7 @@ class LiveGameResearcher:
                 if query.team.team_id not in {away_team_id, home_team_id}:
                     continue
                 feed = self.live_client.game_feed(int(game["gamePk"]))
-                return build_team_game_snippet(query.team, target_date, game, feed)
+                return build_team_game_snippet(query.team, target_date, game, feed, self.sporty_video_client)
         return None
 
     def _build_player_home_run_snippet(self, query: PlayerDayHomeRunQuery) -> EvidenceSnippet | None:
@@ -219,7 +219,13 @@ def extract_player_lookup_phrase(question: str) -> str | None:
     return extract_player_candidate(question, patterns=patterns)
 
 
-def build_team_game_snippet(team: TeamIdentity, target_date: str, game: dict[str, Any], feed: dict[str, Any]) -> EvidenceSnippet:
+def build_team_game_snippet(
+    team: TeamIdentity,
+    target_date: str,
+    game: dict[str, Any],
+    feed: dict[str, Any],
+    sporty_video_client: SportyVideoClient,
+) -> EvidenceSnippet:
     teams = game.get("teams", {})
     away = teams.get("away", {})
     home = teams.get("home", {})
@@ -237,7 +243,7 @@ def build_team_game_snippet(team: TeamIdentity, target_date: str, game: dict[str
     result_word = describe_team_game_result(team_score, opponent_score, status)
     top_hitters = summarize_top_hitters(feed, team.team_id)
     top_pitchers = summarize_top_pitchers(feed, team.team_id)
-    scoring_clips = collect_scoring_clips(target_date, int(game["gamePk"]), feed)
+    scoring_clips = collect_scoring_clips(target_date, int(game["gamePk"]), feed, sporty_video_client)
     scoring_plays = collect_scoring_play_rows(feed, away_name=away_name, home_name=home_name, away_team_id=int(away_team.get("id") or 0), home_team_id=int(home_team.get("id") or 0))
     team_scoring_plays = [row for row in scoring_plays if row["batting_team_id"] == team.team_id]
     summary = (
@@ -250,6 +256,8 @@ def build_team_game_snippet(team: TeamIdentity, target_date: str, game: dict[str
             for row in team_scoring_plays[:4]
         )
         summary = f"{summary} Scoring plays for {team.club_name}: {scoring_text}."
+        if scoring_clips:
+            summary = f"{summary} Loaded {len(scoring_clips)} scoring-play clip(s) from this game when available."
     if top_hitters:
         summary = f"{summary} Best bats: {'; '.join(top_hitters)}."
     if top_pitchers:
@@ -405,7 +413,12 @@ def innings_text_to_outs(value: Any) -> int:
         return 0
 
 
-def collect_scoring_clips(target_date: str, game_pk: int, feed: dict[str, Any]) -> list[dict[str, Any]]:
+def collect_scoring_clips(
+    target_date: str,
+    game_pk: int,
+    feed: dict[str, Any],
+    sporty_video_client: SportyVideoClient,
+) -> list[dict[str, Any]]:
     clips: list[dict[str, Any]] = []
     for play in feed.get("liveData", {}).get("plays", {}).get("allPlays", []):
         if not is_scoring_or_highlight_play(play):
@@ -413,7 +426,7 @@ def collect_scoring_clips(target_date: str, game_pk: int, feed: dict[str, Any]) 
         play_id = extract_play_id(play)
         if not play_id:
             continue
-        clips.append(build_clip_payload(target_date, game_pk, play, play_id))
+        clips.append(build_clip_payload(target_date, game_pk, play, play_id, sporty_video_client))
         if len(clips) >= 4:
             break
     return clips
@@ -459,29 +472,40 @@ def build_homer_play_card(
     }
 
 
-def build_clip_payload(target_date: str, game_pk: int, play: dict[str, Any], play_id: str) -> dict[str, Any]:
+def build_clip_payload(
+    target_date: str,
+    game_pk: int,
+    play: dict[str, Any],
+    play_id: str,
+    sporty_video_client: SportyVideoClient,
+) -> dict[str, Any]:
     hit_data = extract_hit_data(play)
+    sporty_page = sporty_video_client.fetch(play_id) if play_id else None
+    event_type = str(play.get("result", {}).get("eventType") or "").lower()
+    tags = ["scoring play"]
+    if event_type == "home_run":
+        tags.append("home run")
     return {
         "play_id": play_id,
         "game_pk": game_pk,
         "game_date": target_date,
-        "title": str(play.get("result", {}).get("description") or ""),
+        "title": sporty_page.title if sporty_page and sporty_page.title else str(play.get("result", {}).get("description") or ""),
         "description": str(play.get("result", {}).get("description") or ""),
         "inning": int(play.get("about", {}).get("inning") or 0),
         "half_inning": str(play.get("about", {}).get("halfInning") or ""),
-        "team_matchup": "",
-        "batter_name": str(play.get("matchup", {}).get("batter", {}).get("fullName") or ""),
-        "pitcher_name": str(play.get("matchup", {}).get("pitcher", {}).get("fullName") or ""),
+        "team_matchup": sporty_page.matchup if sporty_page and sporty_page.matchup else "",
+        "batter_name": sporty_page.batter if sporty_page and sporty_page.batter else str(play.get("matchup", {}).get("batter", {}).get("fullName") or ""),
+        "pitcher_name": sporty_page.pitcher if sporty_page and sporty_page.pitcher else str(play.get("matchup", {}).get("pitcher", {}).get("fullName") or ""),
         "fielder_name": "",
         "actor_name": str(play.get("matchup", {}).get("batter", {}).get("fullName") or ""),
         "actor_roles": ["batter"],
-        "match_tags": ["scoring play"],
-        "savant_url": f"https://baseballsavant.mlb.com/sporty-videos?playId={play_id}",
-        "mp4_url": None,
-        "hit_distance": parse_float(hit_data.get("totalDistance")),
-        "exit_velocity": parse_float(hit_data.get("launchSpeed")),
-        "launch_angle": parse_float(hit_data.get("launchAngle")),
-        "hr_parks": None,
+        "match_tags": tags,
+        "savant_url": sporty_page.savant_url if sporty_page else f"https://baseballsavant.mlb.com/sporty-videos?playId={play_id}",
+        "mp4_url": sporty_page.mp4_url if sporty_page else None,
+        "hit_distance": sporty_page.hit_distance if sporty_page and sporty_page.hit_distance is not None else parse_float(hit_data.get("totalDistance")),
+        "exit_velocity": sporty_page.exit_velocity if sporty_page and sporty_page.exit_velocity is not None else parse_float(hit_data.get("launchSpeed")),
+        "launch_angle": sporty_page.launch_angle if sporty_page and sporty_page.launch_angle is not None else parse_float(hit_data.get("launchAngle")),
+        "hr_parks": sporty_page.hr_parks if sporty_page else None,
         "explanation": "Relevant because it was a decisive scoring play from the requested game.",
     }
 
