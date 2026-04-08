@@ -170,6 +170,7 @@ class BaseballResearchEngine:
         yearless_month_day = question_mentions_yearless_month_day(question)
         visual_query = any(token in question.lower() for token in VISUAL_HINTS)
         cohort_filter_requested = parse_cohort_filter(question) is not None
+        direct_player_lookup = self._looks_like_direct_player_lookup(question)
 
         connection = get_connection(self.settings.database_path)
         initialize_database(connection)
@@ -465,7 +466,11 @@ class BaseballResearchEngine:
                 context.historical_evidence.append(metric_gap_snippet)
             if is_drs_question(question) and wants_drs_data_lookup(question) and not date_specific_drs:
                 context.historical_evidence.extend(self.drs_helper.historical_snippets(connection, question))
-            if not replay_focused and live_game_snippet is None and not date_specific_drs:
+            if direct_player_lookup and live_game_snippet is None and not date_specific_drs:
+                self._extend_unique_snippets(context.historical_evidence, self._player_or_team_summaries(connection, question))
+                context.historical_evidence.extend(self._single_game_leaderboard_snippets(connection, question))
+                context.historical_evidence.extend(self._document_snippets(connection, question))
+            elif not replay_focused and live_game_snippet is None and not date_specific_drs:
                 if (
                     not comparison_focused
                     and
@@ -493,7 +498,7 @@ class BaseballResearchEngine:
                     and statcast_relationship_snippet is None
                     and not (yearless_month_day and visual_query)
                 ):
-                    context.historical_evidence.extend(self._player_or_team_summaries(connection, question))
+                    self._extend_unique_snippets(context.historical_evidence, self._player_or_team_summaries(connection, question))
                 context.historical_evidence.extend(self._single_game_leaderboard_snippets(connection, question))
                 context.historical_evidence.extend(self._document_snippets(connection, question))
         finally:
@@ -701,7 +706,8 @@ class BaseballResearchEngine:
 
     def _player_summary(self, connection, player_name: str) -> EvidenceSnippet | None:
         if not table_exists(connection, "lahman_people"):
-            return None
+            return self._build_live_only_player_summary(player_name)
+        live_profile = self._lookup_live_person_profile(player_name)
         candidate_rows = connection.execute(
             """
             SELECT *
@@ -719,11 +725,10 @@ class BaseballResearchEngine:
             (f"%{player_name.lower()}%", f"%{player_name.lower()}%", player_name.lower()),
         ).fetchall()
         if not candidate_rows:
-            return None
+            return self._build_live_only_player_summary(player_name, live_profile)
         row = max(candidate_rows, key=lambda item: self._player_profile_rank(connection, item, player_name))
 
         player_id = row["playerid"]
-        live_profile = self._lookup_live_person_profile(player_name)
         latest_team = self._latest_player_team(connection, player_id)
         primary_position = self._latest_player_position(connection, player_id)
         batting_summary = self._aggregate_player_totals(
@@ -839,6 +844,77 @@ class BaseballResearchEngine:
             },
         )
 
+    def _build_live_only_player_summary(
+        self,
+        player_name: str,
+        live_profile: dict[str, Any] | None = None,
+    ) -> EvidenceSnippet | None:
+        profile = live_profile or self._lookup_live_person_profile(player_name)
+        if not profile:
+            return None
+        full_name = str(profile.get("fullName") or player_name).strip()
+        identity_bits: list[str] = []
+        bat_side = str(((profile.get("batSide") or {}).get("code") or "")).strip()
+        pitch_hand = str(((profile.get("pitchHand") or {}).get("code") or "")).strip()
+        if bat_side:
+            identity_bits.append(
+                {
+                    "L": "left-handed hitter",
+                    "R": "right-handed hitter",
+                    "S": "switch-hitter",
+                    "B": "switch-hitter",
+                }.get(bat_side.upper(), f"bats {bat_side.upper()}")
+            )
+        if pitch_hand:
+            identity_bits.append(
+                {
+                    "L": "throws left",
+                    "R": "throws right",
+                }.get(pitch_hand.upper(), f"throws {pitch_hand.upper()}")
+            )
+        primary_position = str(((profile.get("primaryPosition") or {}).get("name") or "")).strip()
+        if primary_position:
+            identity_bits.append(primary_position)
+        current_team = str(((profile.get("currentTeam") or {}).get("name") or "")).strip()
+        if current_team:
+            identity_bits.append(f"currently with {current_team}")
+        parts: list[str] = []
+        if identity_bits:
+            parts.append(f"{full_name} is an MLB player listed by MLB Stats as a {'; '.join(identity_bits)}.")
+        birth_date = str(profile.get("birthDate") or "").strip()
+        birth_city = str(profile.get("birthCity") or "").strip()
+        birth_state = str(profile.get("birthStateProvince") or "").strip()
+        birth_country = str(profile.get("birthCountry") or "").strip()
+        if birth_date:
+            try:
+                parsed = date.fromisoformat(birth_date)
+                birth_text = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            except ValueError:
+                birth_text = birth_date
+            location = ", ".join(part for part in (birth_city, birth_state, birth_country) if part)
+            if location:
+                parts.append(f"Born on {birth_text} in {location}.")
+            else:
+                parts.append(f"Born on {birth_text}.")
+        mlb_debut = str(profile.get("mlbDebutDate") or "").strip()
+        if mlb_debut:
+            parts.append(f"MLB debut: {mlb_debut}.")
+        if not parts:
+            parts.append(f"{full_name} appears in the MLB Stats player directory.")
+        return EvidenceSnippet(
+            source="Player Profile",
+            title=f"{full_name} career summary",
+            citation="MLB Stats API people endpoint",
+            summary=" ".join(parts),
+            payload={
+                "player_id": int(profile.get("id") or 0),
+                "birth_date": birth_date,
+                "current_team": current_team,
+                "debut": mlb_debut,
+                "final_game": "",
+            },
+        )
+
     def _lookup_live_person_profile(self, player_name: str) -> dict[str, Any] | None:
         try:
             people = self.live_client.search_people(player_name)
@@ -918,6 +994,29 @@ class BaseballResearchEngine:
         active_hint = 1 if latest_season >= (self.settings.live_season or date.today().year) - 1 else 0
         final_game = str(row["finalgame"] or "")
         return (exact_match, active_hint, latest_season, total_games, final_game)
+
+    @staticmethod
+    def _extend_unique_snippets(target: list[EvidenceSnippet], snippets: list[EvidenceSnippet]) -> None:
+        seen = {(snippet.source, snippet.title) for snippet in target}
+        for snippet in snippets:
+            key = (snippet.source, snippet.title)
+            if key in seen:
+                continue
+            target.append(snippet)
+            seen.add(key)
+
+    @staticmethod
+    def _looks_like_direct_player_lookup(question: str) -> bool:
+        lowered = question.lower().strip()
+        if not extract_name_candidates(question):
+            return False
+        return bool(
+            re.search(r"\bwho\s+(?:is|was)\b", lowered)
+            or re.search(r"\btell\s+me\s+about\b", lowered)
+            or re.search(r"\bbio(?:graphy)?\b", lowered)
+            or re.search(r"\bbirthday\b", lowered)
+            or re.search(r"\bbirth\s+date\b", lowered)
+        )
 
     def _latest_player_team(self, connection, player_id: str) -> str:
         candidate_tables = [
