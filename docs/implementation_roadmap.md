@@ -234,6 +234,20 @@ Implemented in this pass:
   -> provider instead of dying on the first source-family miss
 - DB migration fix for new Statcast event columns on existing databases
 
+Implemented since then:
+
+- reusable cohort/timeline leaderboard layer for:
+  - manager eras
+  - country-of-birth cohorts
+  - shared `best / worst / highest / lowest` metric routing across those cohorts
+- generalized Statcast event-set leaderboard layer for:
+  - event-set + metric + aggregation + qualifier queries
+  - exact-day event leaderboards such as `highest EV hits from 07/23/17`
+  - player-level aggregate event questions such as
+    `lowest average home run distance with at least 10 HR`
+  - better bounded raw fallback for narrow date windows when the local compact
+    event index is missing a window
+
 Tester-derived failure classes now tracked explicitly:
 
 - aggregate vs single-opponent relationships
@@ -246,6 +260,10 @@ Tester-derived failure classes now tracked explicitly:
   - example shape: `lowest average home run distance with at least 10 HR`
 - event-set leaderboards with many orthogonal filters
   - example shape: date + EV + event type + park + direction + pitch type + count
+- event-set aggregation and qualifier grammar
+  - example shape: `player average home run distance with at least 10 HR`
+- exact historical slash-date queries with short years
+  - example shape: `from 07/23/17`
 - same metric grammar across historical, synced local modern, and provider-backed
   season data
 

@@ -12,7 +12,7 @@ MONTH_DAY_YEAR_PATTERN = re.compile(
     r")\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b",
     re.IGNORECASE,
 )
-SLASH_DATE_PATTERN = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+SLASH_DATE_PATTERN = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")
 YEAR_PATTERN = re.compile(r"\b(18\d{2}|19\d{2}|20\d{2})\b")
 FIRST_N_GAMES_PATTERN = re.compile(
     r"\b(?:through|thru|over|in|across)\s+(?:the\s+)?first\s+([a-z0-9-]+(?:\s+[a-z0-9-]+){0,3})\s+games?\b"
@@ -247,7 +247,7 @@ def extract_date_window(
     if slash_match:
         month = int(slash_match.group(1))
         day_value = int(slash_match.group(2))
-        year_value = int(slash_match.group(3))
+        year_value = normalize_slash_year(slash_match.group(3), default_year)
         target = date(year_value, month, day_value)
         return DateWindow(target, target, target.isoformat())
 
@@ -262,6 +262,14 @@ def extract_date_window(
         return DateWindow(target, target, target.isoformat())
 
     return None
+
+
+def normalize_slash_year(raw_year: str, default_year: int) -> int:
+    year_value = int(raw_year)
+    if len(raw_year) == 4:
+        return year_value
+    cutoff = (default_year % 100) + 1
+    return 2000 + year_value if year_value <= cutoff else 1900 + year_value
 
 
 def extract_calendar_day_window(question: str, default_year: int) -> DateWindow | None:

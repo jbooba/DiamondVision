@@ -562,6 +562,63 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 rows,
             )
 
+    if analysis_type == "cohort_metric_leaderboard":
+        rows = payload.get("rows")
+        metric_label = str(payload.get("metric") or "Metric")
+        role = str(payload.get("role") or "")
+        if isinstance(rows, list):
+            columns = [
+                {"key": "rank", "label": "#", "align": "right"},
+                {"key": "player_name", "label": "Player", "align": "left"},
+                {"key": "metric_value", "label": metric_label, "align": "right"},
+                {"key": "first_season", "label": "From", "align": "right"},
+                {"key": "last_season", "label": "To", "align": "right"},
+            ]
+            if role in {"pitcher", "starter", "reliever"}:
+                columns.extend(
+                    [
+                        {"key": "games", "label": "G", "align": "right"},
+                        {"key": "games_started", "label": "GS", "align": "right"},
+                        {"key": "innings", "label": "IP", "align": "right"},
+                        {"key": "era", "label": "ERA", "align": "right"},
+                        {"key": "whip", "label": "WHIP", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                        {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "losses", "label": "L", "align": "right"},
+                        {"key": "saves", "label": "SV", "align": "right"},
+                    ]
+                )
+            elif role == "fielder":
+                columns.extend(
+                    [
+                        {"key": "games", "label": "G", "align": "right"},
+                        {"key": "position", "label": "Pos", "align": "left"},
+                        {"key": "fielding_pct", "label": "Fld%", "align": "right"},
+                        {"key": "errors", "label": "E", "align": "right"},
+                        {"key": "assists", "label": "A", "align": "right"},
+                        {"key": "putouts", "label": "PO", "align": "right"},
+                        {"key": "double_plays", "label": "DP", "align": "right"},
+                    ]
+                )
+            else:
+                columns.extend(
+                    [
+                        {"key": "games", "label": "G", "align": "right"},
+                        {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "at_bats", "label": "AB", "align": "right"},
+                        {"key": "avg", "label": "AVG", "align": "right"},
+                        {"key": "obp", "label": "OBP", "align": "right"},
+                        {"key": "slg", "label": "SLG", "align": "right"},
+                        {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "hits", "label": "H", "align": "right"},
+                        {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                    ]
+                )
+            return build_table_display(columns, rows)
+
     if analysis_type in {"manager_era_offense", "manager_era_defense"}:
         rows = payload.get("rows")
         if isinstance(rows, list):
@@ -844,14 +901,15 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
         metric_label = str(payload.get("metric") or "Metric")
         aggregate_mode = str(payload.get("aggregate_mode") or "events")
         if isinstance(leaders, list):
-            if aggregate_mode == "player":
+            if aggregate_mode != "events":
                 columns = [
                     {"key": "rank", "label": "#", "align": "right"},
                     {"key": "player_name", "label": "Player", "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
-                    {"key": "game_date", "label": "Date", "align": "left"},
-                    {"key": "team_matchup", "label": "Game", "align": "left"},
-                    {"key": "event", "label": "Event", "align": "left"},
+                    {"key": "event_count", "label": "Events", "align": "right"},
+                    {"key": "home_runs", "label": "HR", "align": "right"},
+                    {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                    {"key": "latest_date", "label": "Latest", "align": "left"},
                 ]
             else:
                 columns = [
@@ -861,6 +919,8 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                     {"key": "team_matchup", "label": "Game", "align": "left"},
                     {"key": "event", "label": "Event", "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
+                    {"key": "release_speed", "label": "Velo", "align": "right"},
+                    {"key": "release_spin_rate", "label": "Spin", "align": "right"},
                     {"key": "hit_distance", "label": "Dist", "align": "right"},
                     {"key": "launch_angle", "label": "LA", "align": "right"},
                 ]

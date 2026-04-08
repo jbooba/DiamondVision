@@ -188,6 +188,8 @@ The goal is a grammar of baseball relationships, not a bag of prompt templates.
 - generalized event-set leaderboards
   - one grammar for event-type + metric + park + direction + pitch family +
     count + date-window combinations
+  - supports both event rows and player-level aggregate forms such as
+    `average`, `career average`, and minimum-event qualifiers
 - broader base-out / score-state / leverage-context splits
 - handedness and platoon relationships
 - weather / rain-delay / resumed-game relationships

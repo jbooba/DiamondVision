@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any
 
 from .config import Settings
+from .cohort_metric_leaderboards import CohortMetricLeaderboardResearcher
 from .contextual_performance import ContextualPerformanceResearcher
 from .daily_lookup import DailyLookupResearcher, wants_historical_calendar_day_leaderboard
 from .fielding_bible_search import (
@@ -104,6 +105,7 @@ class BaseballResearchEngine:
         self.catalog = MetricCatalog.load(settings.project_root)
         self.live_client = LiveStatsClient(settings)
         self.contextual_performance_researcher = ContextualPerformanceResearcher(settings)
+        self.cohort_metric_researcher = CohortMetricLeaderboardResearcher(settings)
         self.drs_helper = DrsResearchHelper(settings)
         self.daily_lookup_researcher = DailyLookupResearcher(settings)
         self.film_room_researcher = FilmRoomResearcher(settings)
@@ -165,6 +167,7 @@ class BaseballResearchEngine:
         historical_team_snippet = None
         historical_team_fact_snippet = None
         manager_era_snippet = None
+        cohort_metric_snippet = None
         player_metric_snippet = None
         player_season_comparison_snippet = None
         player_start_comparison_snippet = None
@@ -255,7 +258,11 @@ class BaseballResearchEngine:
             if historical_team_fact_snippet:
                 context.historical_evidence.append(historical_team_fact_snippet)
                 context.classification = historical_team_fact_snippet.payload.get("mode", context.classification)
-            manager_era_snippet = self.manager_era_researcher.build_snippet(connection, question)
+            cohort_metric_snippet = self.cohort_metric_researcher.build_snippet(connection, question)
+            if cohort_metric_snippet:
+                context.historical_evidence.append(cohort_metric_snippet)
+                context.classification = cohort_metric_snippet.payload.get("mode", context.classification)
+            manager_era_snippet = None if cohort_metric_snippet is not None else self.manager_era_researcher.build_snippet(connection, question)
             if manager_era_snippet:
                 context.historical_evidence.append(manager_era_snippet)
                 context.classification = manager_era_snippet.payload.get("mode", context.classification)
@@ -386,6 +393,7 @@ class BaseballResearchEngine:
                 or player_situational_snippet is not None
                 or special_leaderboard_snippet is not None
                 or contextual_performance_snippet is not None
+                or cohort_metric_snippet is not None
                 or manager_era_snippet is not None
                 or season_metric_snippet is not None
                 or salary_relationship_snippet is not None
@@ -414,6 +422,7 @@ class BaseballResearchEngine:
                 or special_leaderboard_snippet
                 or contextual_performance_snippet
                 or salary_relationship_snippet
+                or cohort_metric_snippet
                 or manager_era_snippet
                 else self.metric_gap_researcher.build_snippet(question)
             )
@@ -439,6 +448,7 @@ class BaseballResearchEngine:
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
                     and contextual_performance_snippet is None
+                    and cohort_metric_snippet is None
                     and special_leaderboard_snippet is None
                     and season_metric_snippet is None
                     and salary_relationship_snippet is None
@@ -489,6 +499,7 @@ class BaseballResearchEngine:
             and team_history_snippet is None
             and team_split_history_snippet is None
             and contextual_performance_snippet is None
+            and cohort_metric_snippet is None
             and season_metric_snippet is None
             and special_leaderboard_snippet is None
             and salary_relationship_snippet is None
@@ -528,6 +539,7 @@ class BaseballResearchEngine:
             and team_history_snippet is None
             and team_split_history_snippet is None
             and contextual_performance_snippet is None
+            and cohort_metric_snippet is None
             and season_metric_snippet is None
             and special_leaderboard_snippet is None
             and salary_relationship_snippet is None
