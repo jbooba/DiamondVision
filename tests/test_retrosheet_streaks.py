@@ -122,6 +122,12 @@ def test_sync_retrosheet_streaks_builds_records_and_answers_queries(tmp_path: Pa
         assert ab_snippet.payload["rows"][0]["player_name"] == "Joe Sewell"
         assert ab_snippet.payload["rows"][0]["streak_length"] == 3
 
+        spaced_phrase = researcher.build_snippet(connection, "what's the longest at bat streak without a strike out?")
+        assert spaced_phrase is not None
+        assert spaced_phrase.payload["analysis_type"] == "player_streak_leaderboard"
+        assert spaced_phrase.payload["rows"][0]["player_name"] == "Joe Sewell"
+        assert spaced_phrase.payload["rows"][0]["streak_length"] == 3
+
         hit_snippet = researcher.build_snippet(connection, "who has the longest hit streak")
         assert hit_snippet is not None
         assert hit_snippet.payload["rows"][0]["player_name"] == "Joe DiMaggio"

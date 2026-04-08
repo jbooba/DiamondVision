@@ -259,11 +259,16 @@ class BaseballResearchEngine:
             player_season_snippet = (
                 None
                 if player_start_comparison_snippet is not None or player_season_comparison_snippet is not None
-                else self.player_season_researcher.build_snippet(question)
+                else self.player_season_researcher.build_snippet(question, connection)
             )
             if player_season_snippet:
-                context.live_evidence.append(player_season_snippet)
-                context.classification = player_season_snippet.payload.get("mode", "live")
+                target_collection = (
+                    context.live_evidence
+                    if player_season_snippet.payload.get("mode") in {"live", "hybrid"}
+                    else context.historical_evidence
+                )
+                target_collection.append(player_season_snippet)
+                context.classification = player_season_snippet.payload.get("mode", context.classification)
             historical_team_snippet = self.historical_team_researcher.build_snippet(connection, question)
             if historical_team_snippet:
                 context.historical_evidence.append(historical_team_snippet)

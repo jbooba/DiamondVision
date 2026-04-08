@@ -63,6 +63,8 @@ class CohortMetricLeaderboardResearcher:
         else:
             rows = fetch_hitting_rows(connection, query)
         if not rows:
+            if query.metric.source_family == "statcast":
+                return build_statcast_cohort_gap_snippet(connection, query)
             return None
         leader = rows[0]
         summary = build_cohort_metric_summary(query, leader, rows[1:4])
@@ -393,6 +395,7 @@ def fetch_statcast_hitting_summary_rows(connection, query: CohortMetricQuery):
             MIN(season) AS first_season,
             MAX(season) AS last_season,
             CASE WHEN COUNT(DISTINCT upper(team)) = 1 THEN MIN(upper(team)) ELSE 'MULTI' END AS team,
+            COUNT(DISTINCT game_pk) AS games,
             SUM(plate_appearances) AS plate_appearances,
             SUM(at_bats) AS at_bats,
             SUM(hits) AS hits,
@@ -445,6 +448,7 @@ def fetch_statcast_hitting_rows_from_events(connection, query: CohortMetricQuery
             MIN(season) AS first_season,
             MAX(season) AS last_season,
             CASE WHEN COUNT(DISTINCT upper(batting_team)) = 1 THEN MIN(upper(batting_team)) ELSE 'MULTI' END AS team,
+            COUNT(DISTINCT game_pk) AS games,
             COUNT(*) AS plate_appearances,
             SUM(is_ab) AS at_bats,
             SUM(is_hit) AS hits,
@@ -744,3 +748,37 @@ def format_metric_value(formatter: str, value: Any) -> str:
     if numeric is None:
         return "n/a"
     return f"{numeric:{formatter}}"
+
+
+def build_statcast_cohort_gap_snippet(connection, query: CohortMetricQuery) -> EvidenceSnippet:
+    batter_games_ready = table_exists(connection, "statcast_batter_games")
+    statcast_events_ready = table_exists(connection, "statcast_events")
+    scope_text = query.scope_label.lower()
+    if batter_games_ready or statcast_events_ready:
+        detail = (
+            f"The local Statcast cohort path understood this as {query.cohort.label} ranked by {query.metric.label} "
+            f"for {scope_text}, but the synced Statcast warehouse returned no qualifying rows for that filter."
+        )
+    else:
+        detail = (
+            f"The local Statcast cohort path understood this as {query.cohort.label} ranked by {query.metric.label} "
+            f"for {scope_text}, but the synced Statcast warehouse tables are not available yet."
+        )
+    return EvidenceSnippet(
+        source="Cohort Metric Leaderboards",
+        title=f"{query.cohort.label} {query.metric.label} cohort gap",
+        citation="Local Statcast cohort warehouse",
+        summary=(
+            f"I recognize this as a cohort Statcast leaderboard query for {query.cohort.label} by {query.metric.label}. "
+            f"{detail}"
+        ),
+        payload={
+            "analysis_type": "cohort_metric_gap",
+            "mode": "historical",
+            "cohort_kind": query.cohort.kind,
+            "cohort_label": query.cohort.label,
+            "metric": query.metric.label,
+            "source_family": query.metric.source_family,
+            "scope_label": query.scope_label,
+        },
+    )

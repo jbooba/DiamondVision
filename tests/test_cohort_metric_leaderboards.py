@@ -367,6 +367,18 @@ def test_switch_hitter_statcast_cohort_falls_back_to_statcast_events() -> None:
     con.close()
 
 
+def test_switch_hitter_statcast_cohort_reports_local_gap_when_no_statcast_rows() -> None:
+    con = build_test_connection()
+    con.execute("DELETE FROM statcast_batter_games")
+    con.commit()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "highest average exit velocity by a switch hitter in 2021")
+    assert snippet is not None
+    assert snippet.payload["analysis_type"] == "cohort_metric_gap"
+    assert snippet.source == "Cohort Metric Leaderboards"
+    con.close()
+
+
 def test_all_star_cohort_uses_dynamic_player_set_for_career_queries() -> None:
     con = build_test_connection()
     researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)

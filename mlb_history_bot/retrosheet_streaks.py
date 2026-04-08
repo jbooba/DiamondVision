@@ -47,11 +47,11 @@ GAME_STREAK_SOURCE_COLUMNS = (
 )
 
 AB_WITHOUT_STRIKEOUT_PATTERN = re.compile(
-    r"\b(?:at[- ]bats?|abs?|ab)\b.*\bwithout\b.*\bstrikeout\b|\bwithout\b.*\bstrikeout\b.*\b(?:at[- ]bats?|abs?|ab)\b",
+    r"\b(?:at[- ]bats?|at[- ]bat streak|abs?|ab)\b.*\bwithout\b.*\bstrike(?: ?out|outs?)\b|\bwithout\b.*\bstrike(?: ?out|outs?)\b.*\b(?:at[- ]bats?|at[- ]bat streak|abs?|ab)\b",
     re.IGNORECASE,
 )
 PA_WITHOUT_STRIKEOUT_PATTERN = re.compile(
-    r"\b(?:plate appearances?|pas?|pa)\b.*\bwithout\b.*\bstrikeout\b|\bwithout\b.*\bstrikeout\b.*\b(?:plate appearances?|pas?|pa)\b",
+    r"\b(?:plate appearances?|pas?|pa)\b.*\bwithout\b.*\bstrike(?: ?out|outs?)\b|\bwithout\b.*\bstrike(?: ?out|outs?)\b.*\b(?:plate appearances?|pas?|pa)\b",
     re.IGNORECASE,
 )
 HIT_STREAK_PATTERN = re.compile(
@@ -67,7 +67,7 @@ ON_BASE_STREAK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 GAMES_WITHOUT_STRIKEOUT_PATTERN = re.compile(
-    r"\bgames?\b.*\bwithout\b.*\bstrikeout\b|\bwithout\b.*\bstrikeout\b.*\bgames?\b",
+    r"\bgames?\b.*\bwithout\b.*\bstrike(?: ?out|outs?)\b|\bwithout\b.*\bstrike(?: ?out|outs?)\b.*\bgames?\b",
     re.IGNORECASE,
 )
 STREAK_HINT_PATTERN = re.compile(r"\b(longest|most consecutive|record|streak)\b", re.IGNORECASE)

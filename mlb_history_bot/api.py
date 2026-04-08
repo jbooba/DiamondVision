@@ -754,6 +754,29 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
     if analysis_type == "player_season_analysis":
         rows = payload.get("rows")
         if isinstance(rows, list):
+            has_pitching = any(str(row.get("innings") or "").strip() for row in rows)
+            if has_pitching:
+                return build_table_display(
+                    [
+                        {"key": "scope", "label": "Scope", "align": "left"},
+                        {"key": "season", "label": "Season", "align": "right"},
+                        {"key": "team", "label": "Team", "align": "left"},
+                        {"key": "games", "label": "G", "align": "right"},
+                        {"key": "starts", "label": "GS", "align": "right"},
+                        {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "losses", "label": "L", "align": "right"},
+                        {"key": "saves", "label": "SV", "align": "right"},
+                        {"key": "innings", "label": "IP", "align": "right"},
+                        {"key": "era", "label": "ERA", "align": "right"},
+                        {"key": "whip", "label": "WHIP", "align": "right"},
+                        {"key": "hits_allowed", "label": "H", "align": "right"},
+                        {"key": "earned_runs", "label": "ER", "align": "right"},
+                        {"key": "home_runs_allowed", "label": "HR", "align": "right"},
+                        {"key": "bb", "label": "BB", "align": "right"},
+                        {"key": "so", "label": "SO", "align": "right"},
+                    ],
+                    rows,
+                )
             return build_table_display(
                 [
                     {"key": "scope", "label": "Scope", "align": "left"},
@@ -761,6 +784,11 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                     {"key": "team", "label": "Team", "align": "left"},
                     {"key": "games", "label": "G", "align": "right"},
                     {"key": "pa", "label": "PA", "align": "right"},
+                    {"key": "ab", "label": "AB", "align": "right"},
+                    {"key": "runs", "label": "R", "align": "right"},
+                    {"key": "hits", "label": "H", "align": "right"},
+                    {"key": "doubles", "label": "2B", "align": "right"},
+                    {"key": "triples", "label": "3B", "align": "right"},
                     {"key": "avg", "label": "AVG", "align": "right"},
                     {"key": "obp", "label": "OBP", "align": "right"},
                     {"key": "slg", "label": "SLG", "align": "right"},
@@ -769,6 +797,12 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                     {"key": "rbi", "label": "RBI", "align": "right"},
                     {"key": "bb", "label": "BB", "align": "right"},
                     {"key": "so", "label": "SO", "align": "right"},
+                    {"key": "sb", "label": "SB", "align": "right"},
+                    {"key": "cs", "label": "CS", "align": "right"},
+                    {"key": "hbp", "label": "HBP", "align": "right"},
+                    {"key": "sh", "label": "SH", "align": "right"},
+                    {"key": "tb", "label": "TB", "align": "right"},
+                    {"key": "babip", "label": "BABIP", "align": "right"},
                 ],
                 rows,
             )
