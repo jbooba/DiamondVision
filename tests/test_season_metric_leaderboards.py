@@ -367,16 +367,24 @@ def test_statcast_history_span_aggregation_builds() -> None:
     con.close()
 
 
-def test_statcast_history_hitter_chase_rate_in_statcast_era_uses_imported_history() -> None:
+def test_statcast_history_entity_aggregation_prefers_imported_history_for_statcast_era_hitter_metrics() -> None:
     con = build_test_connection()
     researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(con, "which hitter has the highest chase% in the Statcast era?")
-    assert snippet is not None
-    assert snippet.payload["source_family"] == "statcast_history"
-    assert snippet.payload["metric"] == "chase percent"
-    assert snippet.payload["scope_label"] == "Statcast era"
-    assert snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
-    assert round(snippet.payload["rows"][0]["metric_value"], 1) == 40.7
+    chase_snippet = researcher.build_snippet(con, "which hitter has the highest chase% in the Statcast era?")
+    assert chase_snippet is not None
+    assert chase_snippet.payload["source_family"] == "statcast_history"
+    assert chase_snippet.payload["metric"] == "chase percent"
+    assert chase_snippet.payload["scope_label"] == "Statcast era"
+    assert chase_snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
+    assert round(chase_snippet.payload["rows"][0]["metric_value"], 1) == 40.7
+
+    ev_snippet = researcher.build_snippet(con, "which hitter has the highest average EV in the Statcast era?")
+    assert ev_snippet is not None
+    assert ev_snippet.payload["source_family"] == "statcast_history"
+    assert ev_snippet.payload["metric"] == "Avg EV"
+    assert ev_snippet.payload["scope_label"] == "Statcast era"
+    assert ev_snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
+    assert round(ev_snippet.payload["rows"][0]["metric_value"], 1) == 92.9
     con.close()
 
 

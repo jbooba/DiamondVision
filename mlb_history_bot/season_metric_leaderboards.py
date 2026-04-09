@@ -509,14 +509,22 @@ class SeasonMetricLeaderboardResearcher:
         elif query.metric.source_family == "statcast_history":
             rows = fetch_statcast_history_rows(connection, query)
         elif query.metric.source_family == "statcast":
-            rows = fetch_statcast_season_rows(connection, query)
-            if not rows and query.entity_scope == "player":
+            rows: list[dict[str, Any]] = []
+            history_fallback = None
+            if query.entity_scope == "player":
                 history_fallback = build_statcast_history_fallback_query(query)
-                if history_fallback is not None:
-                    fallback_rows = fetch_statcast_history_rows(connection, history_fallback)
-                    if fallback_rows:
-                        query = history_fallback
-                        rows = fallback_rows
+            if query.aggregate_range and history_fallback is not None:
+                fallback_rows = fetch_statcast_history_rows(connection, history_fallback)
+                if fallback_rows:
+                    query = history_fallback
+                    rows = fallback_rows
+            if not rows:
+                rows = fetch_statcast_season_rows(connection, query)
+            if not rows and history_fallback is not None:
+                fallback_rows = fetch_statcast_history_rows(connection, history_fallback)
+                if fallback_rows:
+                    query = history_fallback
+                    rows = fallback_rows
             if not rows and query.entity_scope == "player":
                 provider_fallback = build_statcast_provider_fallback_query(query, self.catalog)
                 if provider_fallback is not None:
@@ -1014,6 +1022,8 @@ def infer_statcast_history_aggregate_mode(column: str, role: str) -> str:
         return "max"
     if normalized.startswith("n_") and normalized.endswith("_formatted"):
         return "sum"
+    if normalized.endswith("_avg"):
+        return "weighted_avg"
     if any(
         token in normalized
         for token in (
