@@ -202,6 +202,7 @@ def build_test_connection() -> sqlite3.Connection:
             strikeout TEXT,
             batting_avg TEXT,
             on_base_plus_slg TEXT,
+            oz_swing_percent TEXT,
             exit_velocity_avg TEXT,
             attack_angle TEXT,
             swords TEXT,
@@ -215,14 +216,14 @@ def build_test_connection() -> sqlite3.Connection:
         """
         INSERT INTO statcast_history_batter_seasons(
             last_name_first_name, player_id, year, player_age, pa, ab, hit, home_run, walk, strikeout,
-            batting_avg, on_base_plus_slg, exit_velocity_avg, attack_angle, swords, pitch_count, batted_ball, barrel
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            batting_avg, on_base_plus_slg, oz_swing_percent, exit_velocity_avg, attack_angle, swords, pitch_count, batted_ball, barrel
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "93.1", "12.5", "45", "2400", "380", "28"),
-            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "92.8", "13.0", "49", "2450", "395", "30"),
-            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "91.0", "10.4", "33", "2200", "340", "19"),
-            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "90.8", "10.1", "31", "2250", "335", "18"),
+            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "29.5", "93.1", "12.5", "45", "2400", "380", "28"),
+            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "30.0", "92.8", "13.0", "49", "2450", "395", "30"),
+            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "41.5", "91.0", "10.4", "33", "2200", "340", "19"),
+            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "40.0", "90.8", "10.1", "31", "2250", "335", "18"),
         ],
     )
     con.execute(
@@ -363,6 +364,19 @@ def test_statcast_history_span_aggregation_builds() -> None:
     assert snippet.payload["source_family"] == "statcast_history"
     assert snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
     assert snippet.payload["rows"][0]["scope_label"] == "2021-2022"
+    con.close()
+
+
+def test_statcast_history_hitter_chase_rate_in_statcast_era_uses_imported_history() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which hitter has the highest chase% in the Statcast era?")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "statcast_history"
+    assert snippet.payload["metric"] == "chase percent"
+    assert snippet.payload["scope_label"] == "Statcast era"
+    assert snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
+    assert round(snippet.payload["rows"][0]["metric_value"], 1) == 40.7
     con.close()
 
 

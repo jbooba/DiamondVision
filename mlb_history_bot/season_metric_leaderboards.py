@@ -262,6 +262,42 @@ STATCAST_HISTORY_RATE_ALIASES: dict[str, tuple[str, ...]] = {
     "avg_swing_speed": ("average swing speed", "avg swing speed", "swing speed"),
     "avg_swing_length": ("average swing length", "avg swing length", "swing length"),
     "fast_swing_rate": ("fast swing rate",),
+    "swing_percent": ("swing rate", "swing percentage", "swing%"),
+    "oz_swing_percent": (
+        "chase percent",
+        "chase rate",
+        "chase percentage",
+        "chase%",
+        "out-of-zone swing rate",
+        "out of zone swing rate",
+        "out-of-zone swing percentage",
+        "out of zone swing percentage",
+        "o-swing%",
+        "o swing%",
+    ),
+    "z_swing_percent": (
+        "zone swing rate",
+        "zone swing percentage",
+        "zone swing%",
+        "z-swing%",
+        "z swing%",
+    ),
+    "oz_contact_percent": (
+        "chase contact rate",
+        "chase contact percentage",
+        "chase contact%",
+        "out-of-zone contact rate",
+        "out of zone contact rate",
+        "o-contact%",
+        "o contact%",
+    ),
+    "iz_contact_percent": (
+        "zone contact rate",
+        "zone contact percentage",
+        "zone contact%",
+        "z-contact%",
+        "z contact%",
+    ),
     "swords": ("swords",),
     "attack_angle": ("attack angle",),
     "attack_direction": ("attack direction",),
@@ -627,20 +663,24 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
             alias_lower = alias.lower().strip()
             if not alias_lower:
                 continue
-            if alias_lower.isalnum() and len(alias_lower) <= 5:
-                pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
-                if re.search(pattern, lowered_question) is None:
-                    continue
-                score = len(alias_lower)
-            else:
-                pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
-                if re.search(pattern, lowered_question) is None:
-                    continue
-                score = len(alias_lower)
+            pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+            score = metric_alias_match_score(alias_lower, pattern, lowered_question)
+            if score is None:
+                continue
             score += metric_match_bonus(metric, lowered_question)
             if best_match is None or score > best_match[0]:
                 best_match = (score, metric)
     return best_match[1] if best_match else None
+
+
+def metric_alias_match_score(alias_lower: str, pattern: str, lowered_question: str) -> int | None:
+    if re.search(pattern, lowered_question) is None:
+        return None
+    if alias_lower == "era":
+        scrubbed = re.sub(r"\b(?:in\s+the\s+)?statcast era\b", " ", lowered_question)
+        if re.search(pattern, scrubbed) is None:
+            return None
+    return len(alias_lower)
 
 
 def strip_qualifier_clauses(lowered_question: str) -> str:
@@ -853,9 +893,10 @@ def find_statcast_history_metric(connection, lowered_question: str) -> SeasonMet
                 if not alias_lower:
                     continue
                 pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
-                if re.search(pattern, lowered_question) is None:
+                score = metric_alias_match_score(alias_lower, pattern, lowered_question)
+                if score is None:
                     continue
-                score = len(alias_lower) + metric_match_bonus(spec, lowered_question)
+                score += metric_match_bonus(spec, lowered_question)
                 if best_match is None or score > best_match[0]:
                     best_match = (score, spec)
     return best_match[1] if best_match else None
