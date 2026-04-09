@@ -70,6 +70,15 @@ class StatcastEventQuery:
 
 SUPPORTED_EVENT_METRICS: tuple[StatcastEventMetricSpec, ...] = (
     StatcastEventMetricSpec(
+        key="event_count",
+        label="count",
+        aliases=(),
+        column="game_pk",
+        raw_key="game_pk",
+        formatter=".0f",
+        unit="",
+    ),
+    StatcastEventMetricSpec(
         key="launch_speed",
         label="exit velocity",
         aliases=("exit velocity", "launch speed", "ev"),
@@ -167,10 +176,10 @@ class StatcastEventResearcher:
         query = parse_statcast_event_query(question, current_season)
         if query is None:
             return None
-        park_filter = None
+        park_filter_codes: tuple[str, ...] | None = None
         if query.park_phrase:
-            park_filter = resolve_park_home_team(connection, query.park_phrase)
-            if park_filter is None:
+            park_filter_codes = resolve_park_home_team_codes(connection, query.park_phrase)
+            if not park_filter_codes:
                 return EvidenceSnippet(
                     source="Statcast Event Planner",
                     title=f"{query.metric.label} park filter gap",
@@ -185,7 +194,7 @@ class StatcastEventResearcher:
                         "context": query.park_phrase,
                     },
                 )
-        rows = scan_statcast_events(connection, self.settings, query, park_filter)
+        rows = scan_statcast_events(connection, self.settings, query, park_filter_codes)
         if not rows:
             return EvidenceSnippet(
                 source="Statcast Event Planner",
@@ -208,7 +217,7 @@ class StatcastEventResearcher:
             source="Statcast Event Leaderboards",
             title=f"{query.scope_label} {query.metric.label} leaderboard",
             citation="local compact Statcast event index with optional raw Statcast fallback",
-            summary=build_statcast_event_summary(query, rows, park_filter),
+            summary=build_statcast_event_summary(query, rows, park_filter_codes),
             payload={
                 "analysis_type": "statcast_event_leaderboard",
                 "mode": mode,
@@ -219,7 +228,7 @@ class StatcastEventResearcher:
                 "leaders": rows,
                 "minimum_events": query.minimum_events,
                 "direction_filter": query.direction_filter,
-                "park_filter": park_filter,
+                "park_filter": list(park_filter_codes or ()),
                 "pitch_family": query.pitch_family,
                 "horizontal_location": query.horizontal_location,
                 "vertical_location": query.vertical_location,
@@ -230,7 +239,12 @@ class StatcastEventResearcher:
 def parse_statcast_event_query(question: str, current_season: int) -> StatcastEventQuery | None:
     lowered = question.lower()
     normalized = normalize_match_text(lowered)
+    event_filter, event_label = detect_event_filter(lowered)
+    if event_label is None:
+        return None
     metric = find_statcast_event_metric(normalized)
+    if metric is None and supports_event_count_leaderboard(lowered, event_label):
+        metric = SUPPORTED_EVENT_METRICS[0]
     if metric is None:
         return None
     ranking_intent = detect_ranking_intent(
@@ -239,9 +253,6 @@ def parse_statcast_event_query(question: str, current_season: int) -> StatcastEv
         require_hint=True,
     )
     if ranking_intent is None:
-        return None
-    event_filter, event_label = detect_event_filter(lowered)
-    if event_label is None:
         return None
     split_key = "risp" if any(hint in lowered for hint in RISP_HINTS) else None
     park_phrase = extract_park_phrase(question)
@@ -290,6 +301,15 @@ def find_statcast_event_metric(normalized_question: str) -> StatcastEventMetricS
     return best_match[1] if best_match else None
 
 
+def supports_event_count_leaderboard(lowered_question: str, event_label: str) -> bool:
+    if event_label == "pitches":
+        return False
+    return bool(
+        re.search(r"\b(?:who has|who had|which player|which hitter|which batter|which team|what team)\b", lowered_question)
+        or re.search(r"\b(?:most|fewest|least|highest|lowest)\b", lowered_question)
+    )
+
+
 def detect_event_filter(lowered_question: str) -> tuple[tuple[str, ...] | None, str | None]:
     if re.search(r"\b(?:home\s*-?\s*runs?|homeruns?|homers?)\b", lowered_question):
         return ("home_run",), "home runs"
@@ -311,6 +331,12 @@ def detect_aggregation_mode(lowered_question: str, event_label: str) -> str:
         return "events"
     if event_label == "pitches":
         return "events"
+    if re.search(r"\b(?:which team|what team)\b", lowered_question):
+        if re.search(r"\b(?:lowest|fewest|least|worst|smallest|shortest)\b", lowered_question):
+            return "team_min"
+        if any(token in lowered_question for token in ("average", "avg", "mean", "career")):
+            return "team_avg"
+        return "team_max"
     if any(token in lowered_question for token in ("average", "avg", "mean", "career")):
         return "player_avg"
     if re.search(r"\b(?:which player|who has|who had|player with)\b", lowered_question):
@@ -407,8 +433,13 @@ def extract_location_filters(lowered_question: str) -> tuple[str | None, str | N
     return horizontal, vertical
 
 
-def scan_statcast_events(connection, settings: Settings, query: StatcastEventQuery, park_filter: str | None) -> list[dict[str, Any]]:
-    local_rows = scan_local_statcast_events(connection, query, park_filter)
+def scan_statcast_events(
+    connection,
+    settings: Settings,
+    query: StatcastEventQuery,
+    park_filter_codes: tuple[str, ...] | None,
+) -> list[dict[str, Any]]:
+    local_rows = scan_local_statcast_events(connection, query, park_filter_codes)
     if local_rows:
         return local_rows
     if local_rows == [] and not should_raw_fallback(query):
@@ -419,7 +450,7 @@ def scan_statcast_events(connection, settings: Settings, query: StatcastEventQue
         for chunk_start, chunk_end in iter_sync_chunks(window.start_date, window.end_date, 21):
             chunk_rows = load_statcast_range(chunk_start.isoformat(), chunk_end.isoformat())
             for item in chunk_rows:
-                event_row = event_to_result_row(item, query, park_filter)
+                event_row = event_to_result_row(item, query, park_filter_codes)
                 if event_row is not None:
                     rows.append(event_row)
     if not rows:
@@ -442,11 +473,15 @@ def should_raw_fallback(query: StatcastEventQuery) -> bool:
     return False
 
 
-def scan_local_statcast_events(connection, query: StatcastEventQuery, park_filter: str | None) -> list[dict[str, Any]] | None:
+def scan_local_statcast_events(
+    connection,
+    query: StatcastEventQuery,
+    park_filter_codes: tuple[str, ...] | None,
+) -> list[dict[str, Any]] | None:
     if not table_exists(connection, "statcast_events"):
         return None
     metric_column = query.metric.column
-    where_clause, params = build_local_event_filters(query, park_filter, metric_column)
+    where_clause, params = build_local_event_filters(query, park_filter_codes, metric_column)
     if query.aggregation_mode == "events":
         rows = connection.execute(
             f"""
@@ -484,10 +519,13 @@ def scan_local_statcast_events(connection, query: StatcastEventQuery, park_filte
         for index, row in enumerate(result, start=1):
             row["rank"] = index
         return result
+    group_select = "batting_team AS team" if query.aggregation_mode.startswith("team_") else "batter_name AS player_name"
+    group_by = "batting_team" if query.aggregation_mode.startswith("team_") else "batter_id, batter_name"
+    tie_break = "team ASC" if query.aggregation_mode.startswith("team_") else "player_name ASC"
     aggregate_rows = connection.execute(
         f"""
         SELECT
-            batter_name AS player_name,
+            {group_select},
             COUNT(*) AS event_count,
             AVG({metric_column}) AS avg_metric_value,
             MAX({metric_column}) AS max_metric_value,
@@ -497,9 +535,9 @@ def scan_local_statcast_events(connection, query: StatcastEventQuery, park_filte
             SUM(is_home_run) AS home_runs
         FROM statcast_events
         WHERE {where_clause}
-        GROUP BY batter_id, batter_name
+        GROUP BY {group_by}
         HAVING COUNT(*) >= ?
-        ORDER BY {aggregate_metric_expression(query)} {"DESC" if query.sort_desc else "ASC"}, COUNT(*) DESC, player_name ASC
+        ORDER BY {aggregate_metric_expression(query)} {"DESC" if query.sort_desc else "ASC"}, COUNT(*) DESC, {tie_break}
         LIMIT 20
         """,
         [*params, query.minimum_events or 1],
@@ -513,8 +551,16 @@ def scan_local_statcast_events(connection, query: StatcastEventQuery, park_filte
     return result
 
 
-def build_local_event_filters(query: StatcastEventQuery, park_filter: str | None, metric_column: str) -> tuple[str, list[Any]]:
-    clauses: list[str] = [f"{metric_column} IS NOT NULL"]
+def build_local_event_filters(
+    query: StatcastEventQuery,
+    park_filter_codes: tuple[str, ...] | None,
+    metric_column: str,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    if query.metric.key != "event_count":
+        clauses.append(f"{metric_column} IS NOT NULL")
+    else:
+        clauses.append("game_pk IS NOT NULL")
     params: list[Any] = []
     if query.start_date is not None and query.end_date is not None:
         clauses.append("game_date >= ? AND game_date <= ?")
@@ -544,13 +590,16 @@ def build_local_event_filters(query: StatcastEventQuery, park_filter: str | None
     if query.vertical_location:
         clauses.append("vertical_location = ?")
         params.append(query.vertical_location)
-    if park_filter:
-        clauses.append("home_team = ?")
-        params.append(park_filter)
+    if park_filter_codes:
+        placeholders = ", ".join("?" for _ in park_filter_codes)
+        clauses.append(f"home_team IN ({placeholders})")
+        params.extend(park_filter_codes)
     return " AND ".join(clauses), params
 
 
 def aggregate_metric_expression(query: StatcastEventQuery) -> str:
+    if query.metric.key == "event_count":
+        return "COUNT(*)"
     if query.aggregation_mode == "player_avg":
         return f"AVG({query.metric.column})"
     if query.aggregation_mode == "player_min":
@@ -559,6 +608,9 @@ def aggregate_metric_expression(query: StatcastEventQuery) -> str:
 
 
 def select_aggregate_metric_value(row: dict[str, Any], aggregation_mode: str) -> float | None:
+    if "event_count" in row:
+        if aggregation_mode in {"player_max", "player_min", "team_max", "team_min"}:
+            return safe_float(row.get("event_count"))
     if aggregation_mode == "player_avg":
         return safe_float(row.get("avg_metric_value"))
     if aggregation_mode == "player_min":
@@ -572,13 +624,17 @@ def resolve_event_windows(settings: Settings, query: StatcastEventQuery):
     return resolve_statcast_sync_windows(settings, start_season=query.start_season, end_season=query.end_season)
 
 
-def event_to_result_row(item: dict[str, Any], query: StatcastEventQuery, park_filter: str | None) -> dict[str, Any] | None:
+def event_to_result_row(
+    item: dict[str, Any],
+    query: StatcastEventQuery,
+    park_filter_codes: tuple[str, ...] | None,
+) -> dict[str, Any] | None:
     if str(item.get("game_type") or "R") not in {"R", ""}:
         return None
     event_name = str(item.get("events") or "").strip().lower()
     if query.event_filter and event_name not in query.event_filter:
         return None
-    if park_filter and str(item.get("home_team") or "") != park_filter:
+    if park_filter_codes and str(item.get("home_team") or "") not in park_filter_codes:
         return None
     pitch_name = str(item.get("pitch_name") or "").strip()
     if query.pitch_family and not pitch_matches_family(pitch_name, query.pitch_family):
@@ -595,6 +651,7 @@ def event_to_result_row(item: dict[str, Any], query: StatcastEventQuery, park_fi
         return None
     return {
         "player_name": extract_batter_name(item),
+        "team": str(item.get("batting_team") or ""),
         "pitcher_name": format_pitcher_name(str(item.get("player_name") or "")),
         "game_date": str(item.get("game_date") or ""),
         "team_matchup": f"{item.get('away_team') or ''} @ {item.get('home_team') or ''}".strip(),
@@ -621,14 +678,15 @@ def event_to_result_row(item: dict[str, Any], query: StatcastEventQuery, park_fi
 
 def aggregate_player_rows(rows: list[dict[str, Any]], query: StatcastEventQuery) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
+    name_key = "team" if query.aggregation_mode.startswith("team_") else "player_name"
     for row in rows:
-        player_name = str(row.get("player_name") or "").strip()
-        if not player_name:
+        entity_name = str((row.get("team") if name_key == "team" else row.get("player_name")) or "").strip()
+        if not entity_name:
             continue
         current = grouped.setdefault(
-            player_name,
+            entity_name,
             {
-                "player_name": player_name,
+                name_key: entity_name,
                 "event_count": 0,
                 "avg_metric_value": 0.0,
                 "max_metric_value": None,
@@ -664,7 +722,7 @@ def aggregate_player_rows(rows: list[dict[str, Any]], query: StatcastEventQuery)
         key=lambda row: (
             -sortable_metric_value(row.get("metric_value")) if query.sort_desc else sortable_metric_value(row.get("metric_value")),
             -(safe_int(row.get("event_count")) or 0),
-            str(row.get("player_name") or ""),
+            str(row.get(name_key) or ""),
         )
     )
     ranked = ranked[:20]
@@ -673,7 +731,11 @@ def aggregate_player_rows(rows: list[dict[str, Any]], query: StatcastEventQuery)
     return ranked
 
 
-def build_statcast_event_summary(query: StatcastEventQuery, rows: list[dict[str, Any]], park_filter: str | None) -> str:
+def build_statcast_event_summary(
+    query: StatcastEventQuery,
+    rows: list[dict[str, Any]],
+    park_filter_codes: tuple[str, ...] | None,
+) -> str:
     lead = rows[0]
     metric_value = format_metric_value(query.metric, lead.get("metric_value"))
     filter_bits: list[str] = []
@@ -699,11 +761,20 @@ def build_statcast_event_summary(query: StatcastEventQuery, rows: list[dict[str,
         summary = f"{summary}."
     else:
         qualifier_text = f" with at least {query.minimum_events} {query.event_label}" if query.minimum_events else ""
-        summary = (
-            f"Across {query.scope_label}, the {query.descriptor} player by "
-            f"{aggregation_label(query.aggregation_mode)} {query.metric.label} on {filter_label}{qualifier_text} "
-            f"is {lead.get('player_name')} at {metric_value} across {lead.get('event_count')} event(s)."
-        )
+        entity_label = "team" if query.aggregation_mode.startswith("team_") else "player"
+        entity_name = lead.get("team") if entity_label == "team" else lead.get("player_name")
+        if query.metric.key == "event_count":
+            count_descriptor = "most" if query.sort_desc else "fewest"
+            summary = (
+                f"Across {query.scope_label}, the {entity_label} with the {count_descriptor} {filter_label}{qualifier_text} "
+                f"is {entity_name} with {metric_value} event(s)."
+            )
+        else:
+            summary = (
+                f"Across {query.scope_label}, the {query.descriptor} {entity_label} by "
+                f"{aggregation_label(query.aggregation_mode)} {query.metric.label} on {filter_label}{qualifier_text} "
+                f"is {entity_name} at {metric_value} across {lead.get('event_count')} event(s)."
+            )
     trailing = rows[1:4]
     if trailing:
         if query.aggregation_mode == "events":
@@ -712,13 +783,15 @@ def build_statcast_event_summary(query: StatcastEventQuery, rows: list[dict[str,
                 for row in trailing
             )
         else:
+            row_key = "team" if query.aggregation_mode.startswith("team_") else "player_name"
             board = "; ".join(
-                f"{row.get('player_name')} {format_metric_value(query.metric, row.get('metric_value'))} ({row.get('event_count')} event(s))"
+                f"{row.get(row_key)} {format_metric_value(query.metric, row.get('metric_value'))} ({row.get('event_count')} event(s))"
                 for row in trailing
             )
         summary = f"{summary} Next on the board: {board}."
-    if park_filter:
-        summary = f"{summary} Park filter resolved to home-team code {park_filter}."
+    if park_filter_codes:
+        joined_codes = ", ".join(park_filter_codes)
+        summary = f"{summary} Park filter resolved to home-team code(s) {joined_codes}."
     return summary
 
 
@@ -730,7 +803,7 @@ def aggregation_label(mode: str) -> str:
     return "highest single-event"
 
 
-def resolve_park_home_team(connection, park_phrase: str) -> str | None:
+def resolve_park_home_team_codes(connection, park_phrase: str) -> tuple[str, ...]:
     lowered = park_phrase.casefold()
     rows = connection.execute(
         """
@@ -745,7 +818,7 @@ def resolve_park_home_team(connection, park_phrase: str) -> str | None:
     ).fetchall()
     if rows:
         team_name = str(rows[0]["name"])
-        return team_name_to_statcast_code(team_name)
+        return team_name_to_statcast_codes(team_name)
     rows = connection.execute(
         """
         SELECT teams.name
@@ -767,17 +840,19 @@ def resolve_park_home_team(connection, park_phrase: str) -> str | None:
         (lowered, f"%{lowered}%"),
     ).fetchall()
     if not rows:
-        return None
-    return team_name_to_statcast_code(str(rows[0]["name"]))
+        return ()
+    return team_name_to_statcast_codes(str(rows[0]["name"]))
 
 
-def team_name_to_statcast_code(team_name: str) -> str | None:
-    inverse: dict[str, str] = {}
+def team_name_to_statcast_codes(team_name: str) -> tuple[str, ...]:
+    matches: list[str] = []
     for code, name in TEAM_NAMES.items():
-        previous = inverse.get(name)
-        if previous is None or len(code) < len(previous):
-            inverse[name] = code
-    return inverse.get(team_name)
+        if name == team_name:
+            matches.append(code)
+    if not matches:
+        return ()
+    preferred = sorted(matches, key=lambda code: (0 if len(code) == 3 else 1, code))
+    return tuple(preferred)
 
 
 def pitch_matches_family(pitch_name: str, family: str) -> bool:

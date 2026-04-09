@@ -417,6 +417,15 @@ class BaseballResearchEngine:
                     self._trace(context, f"Matched {season_metric_snippet.source}: {season_metric_snippet.title}")
             statcast_event_snippet = self.statcast_event_researcher.build_snippet(connection, question)
             if statcast_event_snippet:
+                if season_metric_snippet is not None:
+                    season_metric_payload = getattr(season_metric_snippet, "payload", {}) or {}
+                    if season_metric_snippet in context.historical_evidence and season_metric_payload.get("analysis_type") == "season_metric_leaderboard":
+                        context.historical_evidence.remove(season_metric_snippet)
+                        season_metric_snippet = None
+                        self._trace(
+                            context,
+                            "Removed generic season metric evidence in favor of a more specific Statcast event leaderboard.",
+                        )
                 target_collection = (
                     context.live_evidence
                     if statcast_event_snippet.payload.get("mode") in {"live", "hybrid"}

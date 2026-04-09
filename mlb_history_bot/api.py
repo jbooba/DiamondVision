@@ -1016,9 +1016,11 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
         aggregate_mode = str(payload.get("aggregate_mode") or "events")
         if isinstance(leaders, list):
             if aggregate_mode != "events":
+                entity_key = "team" if aggregate_mode.startswith("team_") else "player_name"
+                entity_label = "Team" if aggregate_mode.startswith("team_") else "Player"
                 columns = [
                     {"key": "rank", "label": "#", "align": "right"},
-                    {"key": "player_name", "label": "Player", "align": "left"},
+                    {"key": entity_key, "label": entity_label, "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
                     {"key": "event_count", "label": "Events", "align": "right"},
                     {"key": "home_runs", "label": "HR", "align": "right"},
