@@ -112,6 +112,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional override for the bundled CSV directory (defaults to data/statcast_history)",
     )
 
+    refresh_statcast_parser = subparsers.add_parser(
+        "refresh-statcast-daily",
+        help="Refresh daily Statcast sync tables and optionally re-import bundled custom-history CSV exports",
+    )
+    refresh_statcast_parser.add_argument("--chunk-days", type=int, default=3)
+    refresh_statcast_parser.add_argument("--backfill-days", type=int, default=3)
+    refresh_statcast_parser.add_argument(
+        "--history-dir",
+        type=Path,
+        help="Optional override for the bundled Statcast history CSV directory (defaults to data/statcast_history)",
+    )
+    refresh_statcast_parser.add_argument(
+        "--skip-history",
+        action="store_true",
+        help="Skip importing bundled Statcast history CSVs after the daily sync finishes",
+    )
+
     retrosheet_split_parser = subparsers.add_parser(
         "sync-retrosheet-splits",
         help="Build compact team-game situational split aggregates from Retrosheet plays",
@@ -300,6 +317,37 @@ def main() -> int:
             )
         finally:
             connection.close()
+        for message in messages:
+            print(message)
+        return 0
+
+    if args.command == "refresh-statcast-daily":
+        messages = sync_statcast_data(
+            settings,
+            chunk_days=args.chunk_days,
+            daily=True,
+            backfill_days=args.backfill_days,
+        )
+        if not args.skip_history:
+            data_dir = args.history_dir or (settings.project_root / "data" / "statcast_history")
+            batter_csv = data_dir / "Batter_Stats_Statcast_History.csv"
+            pitcher_csv = data_dir / "Pitcher_Stats_Statcast_History.csv"
+            if batter_csv.exists() or pitcher_csv.exists():
+                connection = get_connection(settings.database_path)
+                try:
+                    messages.extend(
+                        import_statcast_history_exports(
+                            connection,
+                            batter_csv=batter_csv if batter_csv.exists() else None,
+                            pitcher_csv=pitcher_csv if pitcher_csv.exists() else None,
+                        )
+                    )
+                finally:
+                    connection.close()
+            else:
+                messages.append(
+                    f"Skipped bundled Statcast history import: no CSVs found in {data_dir}."
+                )
         for message in messages:
             print(message)
         return 0
