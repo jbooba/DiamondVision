@@ -8,6 +8,7 @@ from typing import Any
 from .config import Settings
 from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent
+from .query_utils import extract_minimum_qualifier
 from .season_metric_leaderboards import (
     SeasonMetricSpec,
     find_season_metric,
@@ -37,6 +38,9 @@ class PlayerGameConditionQuery:
     start_season: int
     end_season: int
     scope_label: str
+    minimum_value: int | None = None
+    minimum_basis: str | None = None
+    minimum_label: str | None = None
 
 
 BIRTHDAY_CONDITION = PlayerGameConditionSpec(
@@ -48,6 +52,16 @@ BIRTHDAY_CONDITION = PlayerGameConditionSpec(
 
 CONDITION_SPECS: tuple[PlayerGameConditionSpec, ...] = (BIRTHDAY_CONDITION,)
 ROLE_HINT_PATTERN = re.compile(r"\b(hitter|batter|offensive player|pitcher|starter|reliever|fielder|defender)\b", re.IGNORECASE)
+CONDITION_MINIMUM_QUALIFIERS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("plate_appearances", ("plate appearances", "pa"), "PA"),
+    ("at_bats", ("at bats", "ab"), "AB"),
+    ("games", ("games", "game"), "birthday games"),
+    ("hits", ("hits", "hit"), "H"),
+    ("home_runs", ("home runs", "home run", "hr", "homers", "homeruns"), "HR"),
+    ("walks", ("walks", "walk", "bb"), "BB"),
+    ("strikeouts", ("strikeouts", "strikeout", "so"), "SO"),
+    ("runs_batted_in", ("rbi", "runs batted in"), "RBI"),
+)
 
 
 class PlayerGameConditionResearcher:
@@ -60,10 +74,10 @@ class PlayerGameConditionResearcher:
             return None
         if query.metric.role not in {"hitter", "player"}:
             return None
-        rows = fetch_hitting_condition_rows(connection, query)
-        if not rows:
+        rows, metadata = fetch_hitting_condition_rows(connection, query)
+        if not rows and not metadata.get("total_row_count"):
             return None
-        summary = build_player_game_condition_summary(query, rows)
+        summary = build_player_game_condition_summary(query, rows, metadata)
         display_rows = rows[:12]
         return EvidenceSnippet(
             source="Retrosheet Player Game Conditions",
@@ -81,15 +95,21 @@ class PlayerGameConditionResearcher:
                 "scope_label": query.scope_label,
                 "rows": display_rows,
                 "displayed_row_count": len(display_rows),
-                "total_row_count": len(rows),
+                "total_row_count": int(metadata.get("total_row_count") or 0),
+                "qualifying_row_count": len(rows),
                 "leaderboard_complete": True,
                 "leaderboard_scope_note": (
                     "This leaderboard was computed from the full local condition-matched game log dataset. "
+                    "Any explicit minimum qualifier was applied against that full result set before ranking. "
                     "The rows array is only the top display slice."
                 ),
-                "max_condition_games": max((safe_int(row["condition_games"]) or 0) for row in rows),
-                "max_plate_appearances": max((safe_int(row["plate_appearances"]) or 0) for row in rows),
-                "max_at_bats": max((safe_int(row["at_bats"]) or 0) for row in rows),
+                "minimum_value": query.minimum_value,
+                "minimum_basis": query.minimum_basis,
+                "minimum_label": query.minimum_label,
+                "max_condition_games": int(metadata.get("max_condition_games") or 0),
+                "max_plate_appearances": int(metadata.get("max_plate_appearances") or 0),
+                "max_at_bats": int(metadata.get("max_at_bats") or 0),
+                "max_basis_value": metadata.get("max_basis_value"),
             },
         )
 
@@ -120,6 +140,7 @@ def parse_player_game_condition_query(question: str, settings: Settings) -> Play
     start_season, end_season, scope_label, _aggregate = resolve_season_scope(question, current_season, "historical")
     if start_season is None or end_season is None:
         return None
+    minimum_basis, minimum_label, minimum_value = parse_condition_minimum_qualifier(question)
     return PlayerGameConditionQuery(
         condition=condition,
         metric=metric,
@@ -128,6 +149,9 @@ def parse_player_game_condition_query(question: str, settings: Settings) -> Play
         start_season=start_season,
         end_season=end_season,
         scope_label=scope_label,
+        minimum_value=minimum_value,
+        minimum_basis=minimum_basis,
+        minimum_label=minimum_label,
     )
 
 
@@ -138,11 +162,19 @@ def find_condition(lowered_question: str) -> PlayerGameConditionSpec | None:
     return None
 
 
-def fetch_hitting_condition_rows(connection, query: PlayerGameConditionQuery) -> list[dict[str, Any]]:
+def parse_condition_minimum_qualifier(question: str) -> tuple[str | None, str | None, int | None]:
+    for basis, nouns, label in CONDITION_MINIMUM_QUALIFIERS:
+        value = extract_minimum_qualifier(question, nouns)
+        if value is not None:
+            return basis, label, value
+    return None, None, None
+
+
+def fetch_hitting_condition_rows(connection, query: PlayerGameConditionQuery) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not (table_exists(connection, "retrosheet_batting") and table_exists(connection, "lahman_people")):
-        return []
+        return [], {"total_row_count": 0}
     if query.condition.key != "birthday":
-        return []
+        return [], {"total_row_count": 0}
     rows = connection.execute(
         """
         SELECT
@@ -244,6 +276,18 @@ def fetch_hitting_condition_rows(connection, query: PlayerGameConditionQuery) ->
                 "last_season": safe_int(row["last_season"]) or 0,
             }
         )
+    total_row_count = len(candidates)
+    max_condition_games = max((safe_int(row["condition_games"]) or 0) for row in candidates) if candidates else 0
+    max_plate_appearances = max((safe_int(row["plate_appearances"]) or 0) for row in candidates) if candidates else 0
+    max_at_bats = max((safe_int(row["at_bats"]) or 0) for row in candidates) if candidates else 0
+    max_basis_value = 0.0
+    if query.minimum_basis:
+        max_basis_value = max((float(row.get(query.minimum_basis) or 0.0) for row in candidates), default=0.0)
+    if query.minimum_value is not None and query.minimum_basis:
+        candidates = [
+            row for row in candidates
+            if float(row.get(query.minimum_basis) or 0.0) >= float(query.minimum_value)
+        ]
     candidates.sort(
         key=lambda row: (
             -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
@@ -254,15 +298,39 @@ def fetch_hitting_condition_rows(connection, query: PlayerGameConditionQuery) ->
     )
     for index, row in enumerate(candidates, start=1):
         row["rank"] = index
-    return candidates
+    metadata = {
+        "total_row_count": total_row_count,
+        "max_condition_games": max_condition_games,
+        "max_plate_appearances": max_plate_appearances,
+        "max_at_bats": max_at_bats,
+        "max_basis_value": max_basis_value,
+    }
+    return candidates, metadata
 
 
-def build_player_game_condition_summary(query: PlayerGameConditionQuery, rows: list[dict[str, Any]]) -> str:
+def build_player_game_condition_summary(
+    query: PlayerGameConditionQuery,
+    rows: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> str:
+    qualifier_text = ""
+    if query.minimum_value is not None and query.minimum_label:
+        qualifier_text = f" among hitters with at least {query.minimum_value} {query.minimum_label}"
+    if not rows:
+        max_basis_value = metadata.get("max_basis_value")
+        max_basis_text = ""
+        if query.minimum_label and max_basis_value is not None:
+            max_basis_numeric = int(max_basis_value) if float(max_basis_value).is_integer() else float(max_basis_value)
+            max_basis_text = f" The full local leaderboard's maximum {query.minimum_label} total was {max_basis_numeric}."
+        return (
+            f"For {query.scope_label}, no hitters in {query.condition.label}{qualifier_text} qualified "
+            f"for a {query.metric.label} ranking.{max_basis_text}"
+        )
     leader = rows[0]
     value_text = f"{float(leader['metric_value']):{query.metric.formatter}}"
     summary = (
         f"For {query.scope_label}, the {query.descriptor} hitter by {query.metric.label} in "
-        f"{query.condition.label} is {leader['player_name']} at {value_text} across "
+        f"{query.condition.label}{qualifier_text} is {leader['player_name']} at {value_text} across "
         f"{leader['condition_games']} game(s) from {leader['first_season']} to {leader['last_season']}."
     )
     trailing = rows[1:4]

@@ -58,6 +58,7 @@ def build_connection() -> sqlite3.Connection:
             ("alpha001", "Alpha", "Slugger", "7", "4"),
             ("beta001", "Beta", "Slugger", "7", "4"),
             ("gamma001", "Gamma", "Slugger", "7", "5"),
+            ("delta001", "Delta", "Slugger", "7", "4"),
         ],
     )
     connection.executemany(
@@ -73,6 +74,11 @@ def build_connection() -> sqlite3.Connection:
             ("g3", "beta001", "value", "4", "4", "1", "1", "0", "0", "1", "1", "0", "0", "0", "0", "1", "0", "0", "20210704", "regular"),
             ("g4", "beta001", "value", "5", "4", "0", "1", "0", "0", "0", "0", "0", "1", "0", "1", "2", "0", "0", "20220704", "regular"),
             ("g5", "gamma001", "value", "4", "4", "1", "3", "1", "0", "0", "1", "0", "0", "0", "0", "0", "0", "0", "20220705", "regular"),
+            ("g6", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20180704", "regular"),
+            ("g7", "delta001", "value", "5", "4", "1", "2", "0", "0", "1", "2", "0", "0", "0", "1", "0", "0", "0", "20190704", "regular"),
+            ("g8", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20200704", "regular"),
+            ("g9", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20210704", "regular"),
+            ("g10", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20220704", "regular"),
         ],
     )
     connection.commit()
@@ -109,5 +115,21 @@ def test_birthday_condition_payload_marks_full_leaderboard_metadata() -> None:
     assert snippet.payload["leaderboard_complete"] is True
     assert snippet.payload["displayed_row_count"] == len(snippet.payload["rows"])
     assert snippet.payload["total_row_count"] >= snippet.payload["displayed_row_count"]
-    assert snippet.payload["max_plate_appearances"] == 9
+    assert snippet.payload["max_plate_appearances"] == 25
     assert "top display slice" in snippet.payload["leaderboard_scope_note"]
+
+
+def test_birthday_condition_respects_explicit_minimum_plate_appearances() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        connection,
+        "which hitter has the highest OPS when playing on their birthday with a minimum of 20 PA",
+    )
+    connection.close()
+    assert snippet is not None
+    assert snippet.payload["minimum_value"] == 20
+    assert snippet.payload["minimum_basis"] == "plate_appearances"
+    assert snippet.payload["rows"][0]["player_name"] == "Delta Slugger"
+    assert snippet.payload["rows"][0]["plate_appearances"] == 25
+    assert "at least 20 PA" in snippet.summary
