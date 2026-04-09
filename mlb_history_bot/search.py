@@ -39,6 +39,7 @@ from .player_season_comparison import PlayerSeasonComparisonResearcher
 from .player_start_comparison import PlayerStartComparisonResearcher
 from .player_situational_leaderboards import PlayerSituationalLeaderboardResearcher
 from .player_season_analysis import PlayerSeasonAnalysisResearcher
+from .player_span_metrics import PlayerSpanMetricResearcher
 from .player_window_stats import PlayerWindowStatsResearcher
 from .provider_metrics import ProviderMetricResearcher
 from .query_utils import (
@@ -152,6 +153,7 @@ class BaseballResearchEngine:
         self.player_start_comparison_researcher = PlayerStartComparisonResearcher(settings)
         self.player_situational_leaderboard_researcher = PlayerSituationalLeaderboardResearcher(settings)
         self.player_season_researcher = PlayerSeasonAnalysisResearcher(settings)
+        self.player_span_metric_researcher = PlayerSpanMetricResearcher(settings)
         self.player_window_stats_researcher = PlayerWindowStatsResearcher(settings)
         self.roster_comparison_researcher = RosterComparisonResearcher(settings)
 
@@ -201,6 +203,7 @@ class BaseballResearchEngine:
         player_start_comparison_snippet = None
         player_season_snippet = None
         player_situational_snippet = None
+        player_span_metric_snippet = None
         player_window_snippet = None
         team_eval_snippet = None
         team_roster_leader_snippet = None
@@ -269,6 +272,10 @@ class BaseballResearchEngine:
                 )
                 target_collection.append(player_situational_snippet)
                 context.classification = player_situational_snippet.payload.get("mode", context.classification)
+            player_span_metric_snippet = self.player_span_metric_researcher.build_snippet(connection, question)
+            if player_span_metric_snippet:
+                context.historical_evidence.append(player_span_metric_snippet)
+                context.classification = player_span_metric_snippet.payload.get("mode", context.classification)
             player_start_comparison_snippet = self.player_start_comparison_researcher.build_snippet(question)
             if player_start_comparison_snippet:
                 target_collection = (
@@ -467,6 +474,7 @@ class BaseballResearchEngine:
                 or team_season_leader_snippet is not None
                 or player_game_condition_snippet is not None
                 or player_team_relationship_snippet is not None
+                or player_span_metric_snippet is not None
                 or player_situational_snippet is not None
                 or special_leaderboard_snippet is not None
                 or contextual_performance_snippet is not None
@@ -498,6 +506,7 @@ class BaseballResearchEngine:
                 or team_season_leader_snippet
                 or player_game_condition_snippet
                 or player_team_relationship_snippet
+                or player_span_metric_snippet
                 or season_metric_snippet
                 or player_situational_snippet
                 or team_split_history_snippet
@@ -535,6 +544,7 @@ class BaseballResearchEngine:
                     and team_roster_leader_snippet is None
                     and team_season_leader_snippet is None
                     and player_game_condition_snippet is None
+                    and player_span_metric_snippet is None
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
                     and retrosheet_streak_snippet is None
@@ -599,6 +609,7 @@ class BaseballResearchEngine:
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
             and season_metric_snippet is None
+            and player_span_metric_snippet is None
             and special_leaderboard_snippet is None
             and salary_relationship_snippet is None
             and statcast_event_snippet is None
@@ -657,6 +668,7 @@ class BaseballResearchEngine:
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
             and season_metric_snippet is None
+            and player_span_metric_snippet is None
             and special_leaderboard_snippet is None
             and salary_relationship_snippet is None
             and statcast_event_snippet is None

@@ -109,10 +109,11 @@ class BaseballChatbot:
             answer = self._model_answer(question, resolved_question, context, history)
         answer = sanitize_answer_text(answer)
         citations = [snippet.title for snippet in context.all_snippets()]
+        follow_up_seed = extract_follow_up_seed(answer, context)
         self.sessions[active_session_id].append(
             {"role": "user", "content": question, "resolved_question": resolved_question}
         )
-        self.sessions[active_session_id].append({"role": "assistant", "content": answer})
+        self.sessions[active_session_id].append({"role": "assistant", "content": answer, "follow_up_seed": follow_up_seed})
         return ChatResult(answer=answer, citations=citations, warnings=context.warnings, context=context)
 
     def _model_answer(self, question: str, resolved_question: str, context, history: list[dict[str, str]]) -> str:
@@ -169,6 +170,11 @@ class BaseballChatbot:
 
     def _resolve_question(self, question: str, session_id: str) -> str:
         previous_question = self._last_resolved_user_question(session_id)
+        previous_seed = self._last_assistant_follow_up_seed(session_id)
+        if previous_seed:
+            contextual_rewrite = rewrite_contextual_follow_up_question(question, previous_seed)
+            if contextual_rewrite:
+                return contextual_rewrite
         if not previous_question:
             return question
         rewritten = rewrite_follow_up_question(question, previous_question, self.engine.catalog)
@@ -211,6 +217,15 @@ class BaseballChatbot:
             if item.get("role") != "user":
                 continue
             return item.get("resolved_question") or item.get("content")
+        return None
+
+    def _last_assistant_follow_up_seed(self, session_id: str) -> dict | None:
+        for item in reversed(self.sessions[session_id]):
+            if item.get("role") != "assistant":
+                continue
+            seed = item.get("follow_up_seed")
+            if isinstance(seed, dict):
+                return seed
         return None
 
     @staticmethod
@@ -327,6 +342,88 @@ def extract_first_json_object(value: str) -> str:
         return stripped
     match = re.search(r"\{.*\}", value, re.DOTALL)
     return match.group(0) if match else ""
+
+
+def extract_follow_up_seed(answer: str, context) -> dict | None:
+    for snippet in [*context.historical_evidence, *context.live_evidence]:
+        payload = getattr(snippet, "payload", {}) or {}
+        rows = payload.get("rows")
+        if not isinstance(rows, list) or not rows:
+            continue
+        row = choose_follow_up_seed_row(answer, rows)
+        if not row:
+            continue
+        player_name = row.get("player_name") or payload.get("player")
+        if not player_name:
+            continue
+        start_season = row.get("scope_start_season")
+        end_season = row.get("scope_end_season")
+        return {
+            "player_name": player_name,
+            "scope_start_season": start_season,
+            "scope_end_season": end_season,
+            "metric": payload.get("metric") or "",
+        }
+    return None
+
+
+def choose_follow_up_seed_row(answer: str, rows: list[object]) -> dict | None:
+    dict_rows = [row for row in rows if isinstance(row, dict)]
+    if not dict_rows:
+        return None
+    lowered_answer = answer.casefold()
+    matching_rows = [
+        row
+        for row in dict_rows
+        if isinstance(row.get("player_name"), str) and row["player_name"].casefold() in lowered_answer
+    ]
+    if matching_rows:
+        matching_rows.sort(
+            key=lambda row: (
+                -len(str(row.get("player_name") or "")),
+                -(float(row.get("plate_appearances") or 0)),
+                -(float(row.get("metric_value") or 0)),
+            )
+        )
+        return matching_rows[0]
+    return dict_rows[0]
+
+
+def rewrite_contextual_follow_up_question(question: str, seed: dict[str, object]) -> str | None:
+    lowered = question.lower().strip()
+    if "those" not in lowered and "that " not in f"{lowered} " and "them" not in lowered:
+        return None
+    player_name = str(seed.get("player_name") or "").strip()
+    start_season = seed.get("scope_start_season")
+    end_season = seed.get("scope_end_season")
+    if not player_name or start_season is None or end_season is None:
+        return None
+    target_phrase = extract_contextual_metric_target(question)
+    if not target_phrase:
+        return None
+    return f"how many {target_phrase} did {player_name} have between {start_season} and {end_season}?"
+
+
+def extract_contextual_metric_target(question: str) -> str | None:
+    trailing_patterns = (
+        re.compile(r"\bof\s+(?:those|that|them)\b.*?\bare\s+(.+?)\s*[?!.]*$", re.IGNORECASE),
+        re.compile(r"\bof\s+(?:those|that|them)\b.*?\bwere\s+(.+?)\s*[?!.]*$", re.IGNORECASE),
+        re.compile(r"\bhow\s+many\s+(.+?)\s+of\s+(?:those|them|that)\b", re.IGNORECASE),
+    )
+    from .season_metric_leaderboards import find_season_metric, normalize_metric_search_text, strip_qualifier_clauses
+
+    for pattern in trailing_patterns:
+        match = pattern.search(question)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        metric = find_season_metric(normalize_metric_search_text(strip_qualifier_clauses(f" {candidate.lower()} ")))
+        if metric is not None:
+            return metric.aliases[0]
+    metric = find_season_metric(normalize_metric_search_text(strip_qualifier_clauses(f" {question.lower()} ")))
+    if metric is not None:
+        return metric.aliases[0]
+    return None
 
 
 def sanitize_answer_text(value: str) -> str:
