@@ -32,6 +32,7 @@ from .pitching_staff_comparison import PitchingStaffComparisonResearcher
 from .pitch_arsenal_leaderboards import PitchArsenalLeaderboardResearcher
 from .person_query import choose_best_person_match
 from .player_metric_lookup import PlayerMetricLookupResearcher
+from .player_game_conditions import PlayerGameConditionResearcher
 from .player_team_relationships import PlayerTeamRelationshipResearcher
 from .player_season_comparison import PlayerSeasonComparisonResearcher
 from .player_start_comparison import PlayerStartComparisonResearcher
@@ -143,6 +144,7 @@ class BaseballResearchEngine:
         self.pitching_staff_comparison_researcher = PitchingStaffComparisonResearcher(settings)
         self.pitch_arsenal_leaderboard_researcher = PitchArsenalLeaderboardResearcher(settings)
         self.player_metric_lookup_researcher = PlayerMetricLookupResearcher(settings)
+        self.player_game_condition_researcher = PlayerGameConditionResearcher(settings)
         self.player_team_relationship_researcher = PlayerTeamRelationshipResearcher(settings)
         self.player_season_comparison_researcher = PlayerSeasonComparisonResearcher(settings)
         self.player_start_comparison_researcher = PlayerStartComparisonResearcher(settings)
@@ -181,6 +183,7 @@ class BaseballResearchEngine:
         manager_era_snippet = None
         cohort_metric_snippet = None
         player_metric_snippet = None
+        player_game_condition_snippet = None
         player_team_relationship_snippet = None
         player_season_comparison_snippet = None
         player_start_comparison_snippet = None
@@ -227,6 +230,10 @@ class BaseballResearchEngine:
                 )
                 target_collection.append(player_metric_snippet)
                 context.classification = player_metric_snippet.payload.get("mode", context.classification)
+            player_game_condition_snippet = self.player_game_condition_researcher.build_snippet(connection, question)
+            if player_game_condition_snippet:
+                context.historical_evidence.append(player_game_condition_snippet)
+                context.classification = player_game_condition_snippet.payload.get("mode", context.classification)
             player_team_relationship_snippet = self.player_team_relationship_researcher.build_snippet(connection, question)
             if player_team_relationship_snippet:
                 context.historical_evidence.append(player_team_relationship_snippet)
@@ -355,7 +362,11 @@ class BaseballResearchEngine:
             contextual_performance_snippet = self.contextual_performance_researcher.build_snippet(connection, question)
             if contextual_performance_snippet:
                 context.historical_evidence.append(contextual_performance_snippet)
-            special_leaderboard_snippet = self.special_leaderboard_researcher.build_snippet(connection, question)
+            special_leaderboard_snippet = (
+                None
+                if player_game_condition_snippet is not None
+                else self.special_leaderboard_researcher.build_snippet(connection, question)
+            )
             if special_leaderboard_snippet:
                 context.historical_evidence.append(special_leaderboard_snippet)
             salary_relationship_snippet = self.salary_relationship_researcher.build_snippet(connection, question)
@@ -421,6 +432,7 @@ class BaseballResearchEngine:
                 or pitch_arsenal_snippet is not None
                 or team_roster_leader_snippet is not None
                 or team_season_leader_snippet is not None
+                or player_game_condition_snippet is not None
                 or player_team_relationship_snippet is not None
                 or player_situational_snippet is not None
                 or special_leaderboard_snippet is not None
@@ -450,6 +462,7 @@ class BaseballResearchEngine:
                 or pitch_arsenal_snippet
                 or team_roster_leader_snippet
                 or team_season_leader_snippet
+                or player_game_condition_snippet
                 or player_team_relationship_snippet
                 or season_metric_snippet
                 or player_situational_snippet
@@ -486,6 +499,7 @@ class BaseballResearchEngine:
                     and player_season_snippet is None
                     and team_roster_leader_snippet is None
                     and team_season_leader_snippet is None
+                    and player_game_condition_snippet is None
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
                     and retrosheet_streak_snippet is None
