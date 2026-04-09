@@ -297,6 +297,134 @@ def test_player_event_count_leaderboard_supports_park_and_direction_filters() ->
     connection.close()
 
 
+def test_player_event_count_leaderboard_supports_multi_season_span_with_park_and_direction_filters() -> None:
+    connection = build_test_connection()
+    connection.executemany(
+        """
+        INSERT INTO lahman_teams(yearid, teamid, name, park) VALUES (?, ?, ?, ?)
+        """,
+        [
+            ("2017", "COL", "Colorado Rockies", "Coors Field"),
+            ("2018", "COL", "Colorado Rockies", "Coors Field"),
+            ("2019", "COL", "Colorado Rockies", "Coors Field"),
+            ("2020", "COL", "Colorado Rockies", "Coors Field"),
+            ("2021", "COL", "Colorado Rockies", "Coors Field"),
+            ("2022", "COL", "Colorado Rockies", "Coors Field"),
+            ("2023", "COL", "Colorado Rockies", "Coors Field"),
+            ("2024", "COL", "Colorado Rockies", "Coors Field"),
+            ("2025", "COL", "Colorado Rockies", "Coors Field"),
+            ("2026", "COL", "Colorado Rockies", "Coors Field"),
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO statcast_events (
+            season, game_date, game_pk, at_bat_number, pitch_number,
+            batter_id, batter_name, pitcher_id, pitcher_name,
+            batting_team, pitching_team, home_team, away_team,
+            pitch_name, pitch_family, event, is_ab, is_hit, is_home_run, is_strikeout,
+            has_risp, count_key, runs_batted_in, horizontal_location, vertical_location, field_direction,
+            release_speed, release_spin_rate, launch_speed, launch_angle, hit_distance,
+            bat_speed, estimated_ba, estimated_woba, estimated_slg
+        ) VALUES (
+            :season, :game_date, :game_pk, :at_bat_number, :pitch_number,
+            :batter_id, :batter_name, :pitcher_id, :pitcher_name,
+            :batting_team, :pitching_team, :home_team, :away_team,
+            :pitch_name, :pitch_family, :event, :is_ab, :is_hit, :is_home_run, :is_strikeout,
+            :has_risp, :count_key, :runs_batted_in, :horizontal_location, :vertical_location, :field_direction,
+            :release_speed, :release_spin_rate, :launch_speed, :launch_angle, :hit_distance,
+            :bat_speed, :estimated_ba, :estimated_woba, :estimated_slg
+        )
+        """,
+        [
+            build_event_row(
+                season=2018,
+                game_date="2018-06-01",
+                game_pk=601,
+                at_bat_number=1,
+                pitch_number=2,
+                batter_id=77,
+                batter_name="Road Power",
+                pitcher_id=901,
+                pitcher_name="Pitcher G",
+                event="home_run",
+                launch_speed=107.0,
+                hit_distance=410.0,
+                launch_angle=29.0,
+                batting_team="LAD",
+                pitching_team="COL",
+                home_team="COL",
+                away_team="LAD",
+                field_direction="left field",
+            ),
+            build_event_row(
+                season=2019,
+                game_date="2019-07-01",
+                game_pk=602,
+                at_bat_number=1,
+                pitch_number=2,
+                batter_id=77,
+                batter_name="Road Power",
+                pitcher_id=902,
+                pitcher_name="Pitcher H",
+                event="home_run",
+                launch_speed=108.0,
+                hit_distance=412.0,
+                launch_angle=31.0,
+                batting_team="LAD",
+                pitching_team="COL",
+                home_team="COL",
+                away_team="LAD",
+                field_direction="left field",
+            ),
+            build_event_row(
+                season=2020,
+                game_date="2020-08-01",
+                game_pk=603,
+                at_bat_number=1,
+                pitch_number=2,
+                batter_id=77,
+                batter_name="Road Power",
+                pitcher_id=903,
+                pitcher_name="Pitcher I",
+                event="home_run",
+                launch_speed=106.0,
+                hit_distance=408.0,
+                launch_angle=30.0,
+                batting_team="LAD",
+                pitching_team="COL",
+                home_team="COL",
+                away_team="LAD",
+                field_direction="left field",
+            ),
+        ],
+    )
+    connection.commit()
+    researcher = StatcastEventResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        connection,
+        "in the last 10 years, which hitter has the most homeruns to left field at Coors Field?",
+    )
+    assert snippet is not None
+    assert snippet.payload["analysis_type"] == "statcast_event_leaderboard"
+    assert snippet.payload["scope_label"] == "2017-2026"
+    assert snippet.payload["aggregate_mode"] == "player_max"
+    assert snippet.payload["leaders"][0]["player_name"] == "Road Power"
+    assert snippet.payload["leaders"][0]["event_count"] == 3
+    connection.close()
+
+
 def test_generic_all_time_strikeout_history_question_does_not_parse_as_statcast_event() -> None:
     assert parse_statcast_event_query("which hitter has struck out the most times in mlb history", 2026) is None
     assert parse_statcast_event_query("which hitter is the all-time leader in strikeouts?", 2026) is None
+
+
+def test_hitter_wording_uses_aggregated_player_leaderboard_mode() -> None:
+    query = parse_statcast_event_query(
+        "in the last 10 years, which hitter has the most homeruns to left field at Coors Field?",
+        2026,
+    )
+    assert query is not None
+    assert query.aggregation_mode == "player_max"
+    assert query.start_season == 2017
+    assert query.end_season == 2026

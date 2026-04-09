@@ -10,7 +10,7 @@ from .config import Settings
 from .models import EvidenceSnippet
 from .pybaseball_adapter import load_statcast_range
 from .query_intent import detect_ranking_intent, mentions_current_scope
-from .query_utils import extract_date_window, extract_referenced_season, question_mentions_explicit_year
+from .query_utils import extract_date_window, extract_referenced_season, extract_season_span, question_mentions_explicit_year
 from .statcast_sync import TEAM_NAMES, iter_sync_chunks, resolve_statcast_sync_windows
 from .storage import table_exists
 
@@ -365,7 +365,7 @@ def detect_aggregation_mode(lowered_question: str, event_label: str) -> str:
         return "events"
     if event_label == "pitches":
         return "events"
-    if re.search(r"\b(?:which team|what team)\b", lowered_question):
+    if re.search(r"\b(?:which team|what team|team with)\b", lowered_question):
         if re.search(r"\b(?:lowest|fewest|least|worst|smallest|shortest)\b", lowered_question):
             return "team_min"
         if any(token in lowered_question for token in ("average", "avg", "mean", "career")):
@@ -373,10 +373,17 @@ def detect_aggregation_mode(lowered_question: str, event_label: str) -> str:
         return "team_max"
     if any(token in lowered_question for token in ("average", "avg", "mean", "career")):
         return "player_avg"
-    if re.search(r"\b(?:which player|who has|who had|player with)\b", lowered_question):
+    if re.search(
+        r"\b(?:which player|which hitter|which batter|which pitcher|which starter|which reliever|"
+        r"what player|what hitter|what batter|what pitcher|"
+        r"who has|who had|player with|hitter with|batter with|pitcher with|starter with|reliever with)\b",
+        lowered_question,
+    ):
         if re.search(r"\b(?:lowest|fewest|shortest|smallest|worst)\b", lowered_question):
             return "player_min"
         return "player_max"
+    if re.search(r"\b(?:most|fewest|least|highest|lowest|best|worst)\b", lowered_question):
+        return "player_max" if not re.search(r"\b(?:lowest|fewest|least|worst|smallest|shortest)\b", lowered_question) else "player_min"
     return "events"
 
 
@@ -400,6 +407,9 @@ def resolve_query_scope(
     date_window = extract_date_window(question, current_season)
     if date_window is not None:
         return None, None, date_window.start_date, date_window.end_date, date_window.label
+    season_span = extract_season_span(question, current_season)
+    if season_span is not None:
+        return season_span.start_season, season_span.end_season, None, None, season_span.label
     if "statcast era" in lowered:
         return 2015, current_season, None, None, "Statcast era"
     if "mlb history" in lowered or "history" in lowered or "career" in lowered:
