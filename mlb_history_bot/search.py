@@ -288,7 +288,7 @@ class BaseballResearchEngine:
             if player_span_metric_snippet:
                 context.historical_evidence.append(player_span_metric_snippet)
                 context.classification = player_span_metric_snippet.payload.get("mode", context.classification)
-            player_start_comparison_snippet = self.player_start_comparison_researcher.build_snippet(question)
+            player_start_comparison_snippet = self.player_start_comparison_researcher.build_snippet(connection, question)
             if player_start_comparison_snippet:
                 target_collection = (
                     context.live_evidence
@@ -297,7 +297,11 @@ class BaseballResearchEngine:
                 )
                 target_collection.append(player_start_comparison_snippet)
                 context.classification = player_start_comparison_snippet.payload.get("mode", context.classification)
-            player_season_comparison_snippet = self.player_season_comparison_researcher.build_snippet(connection, question)
+            player_season_comparison_snippet = (
+                None
+                if player_start_comparison_snippet is not None
+                else self.player_season_comparison_researcher.build_snippet(connection, question)
+            )
             if player_season_comparison_snippet:
                 target_collection = (
                     context.live_evidence

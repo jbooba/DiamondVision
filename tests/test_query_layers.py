@@ -64,6 +64,16 @@ class FakeLiveClient:
 
     def search_people(self, query: str):
         normalized = query.strip().casefold()
+        if normalized == "aaron judge":
+            return [
+                {
+                    "id": 592450,
+                    "fullName": "Aaron Judge",
+                    "active": True,
+                    "isPlayer": True,
+                    "isVerified": True,
+                }
+            ]
         if normalized == "cal raleigh":
             return [
                 {
@@ -489,17 +499,74 @@ def test_parse_player_window_metric_query_for_home_runs() -> None:
 
 
 def test_parse_player_start_comparison_query_for_ops() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            namefirst TEXT,
+            namelast TEXT,
+            namegiven TEXT,
+            debut TEXT,
+            finalgame TEXT
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO lahman_people (playerid, namefirst, namelast, namegiven, debut, finalgame) VALUES (?, ?, ?, ?, ?, ?)",
+        ("alonspe01", "Pete", "Alonso", "Pete Alonso", "2019-03-28", ""),
+    )
     catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
     query = parse_player_start_comparison_query(
+        connection,
         "Compare Pete Alonso's OPS through the 2026 season with his previous season starts",
         FakeLiveClient(),
         catalog,
         2026,
     )
+    connection.close()
     assert query is not None
     assert query.player_name == "Pete Alonso"
     assert query.season == 2026
     assert query.metric.label == "OPS"
+
+
+def test_parse_player_start_comparison_query_for_explicit_first_n_games_comparison() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            namefirst TEXT,
+            namelast TEXT,
+            namegiven TEXT,
+            debut TEXT,
+            finalgame TEXT
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO lahman_people (playerid, namefirst, namelast, namegiven, debut, finalgame) VALUES (?, ?, ?, ?, ?, ?)",
+        ("judgeaa01", "Aaron", "Judge", "Aaron Judge", "2016-08-13", ""),
+    )
+    catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
+    query = parse_player_start_comparison_query(
+        connection,
+        "compare Aaron Judge's first 10 games of 2026 to his first 10 games of 2025",
+        FakeLiveClient(),
+        catalog,
+        2026,
+    )
+    connection.close()
+    assert query is not None
+    assert query.explicit_compare is True
+    assert query.first_n == 10
+    assert query.left_player_name == "Aaron Judge"
+    assert query.right_player_name == "Aaron Judge"
+    assert query.left_season == 2026
+    assert query.right_season == 2025
 
 
 def test_parse_roster_comparison_query() -> None:
