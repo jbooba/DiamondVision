@@ -42,6 +42,7 @@ from .player_season_analysis import PlayerSeasonAnalysisResearcher
 from .player_span_metrics import PlayerSpanMetricResearcher
 from .player_window_stats import PlayerWindowStatsResearcher
 from .provider_metrics import ProviderMetricResearcher
+from .query_frame import QueryFrame, build_query_frame
 from .query_utils import (
     extract_date_window,
     extract_name_candidates,
@@ -191,6 +192,7 @@ class BaseballResearchEngine:
         connection = get_connection(self.settings.database_path)
         self._trace(context, "Opened local database.")
         initialize_database(connection)
+        query_frame: QueryFrame | None = None
         daily_lookup_snippet = None
         live_game_snippet = None
         historical_team_snippet = None
@@ -231,6 +233,13 @@ class BaseballResearchEngine:
         provider_metric_snippet = None
         metric_gap_snippet = None
         try:
+            query_frame = build_query_frame(
+                question,
+                current_season=current_year,
+                catalog=self.catalog,
+                connection=connection,
+            )
+            self._trace(context, query_frame.summary())
             season_comparison_snippet = self.season_comparison_researcher.build_snippet(connection, question)
             if season_comparison_snippet:
                 context.live_evidence.append(season_comparison_snippet)
@@ -579,6 +588,7 @@ class BaseballResearchEngine:
                     and statcast_event_snippet is None
                     and statcast_relationship_snippet is None
                     and not (yearless_month_day and visual_query)
+                    and not self._should_block_generic_summary_fallback(query_frame)
                 ):
                     self._extend_unique_snippets(context.historical_evidence, self._player_or_team_summaries(connection, question))
                 context.historical_evidence.extend(self._single_game_leaderboard_snippets(connection, question))
@@ -751,6 +761,20 @@ class BaseballResearchEngine:
             )
             self._trace(context, "No grounded snippets matched; returned insufficient-evidence warning.")
         return context
+
+    @staticmethod
+    def _should_block_generic_summary_fallback(query_frame: QueryFrame | None) -> bool:
+        if query_frame is None:
+            return False
+        if query_frame.kind in {
+            "direct_player_metric",
+            "metric_leaderboard",
+            "cohort_or_condition_leaderboard",
+            "cohort_lookup",
+            "condition_lookup",
+        }:
+            return True
+        return bool(query_frame.metric_label and query_frame.layer_count >= 2)
 
     def _classify(self, question: str) -> str:
         lowered = question.lower()
