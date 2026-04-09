@@ -384,6 +384,8 @@ def resolve_player_reference(
     if season is None and any(hint in lowered for hint in CURRENT_SCOPE_HINTS):
         season = current_season
     candidate = clean_player_reference_phrase(phrase, metric_terms)
+    if fallback_name and candidate.lower() in PRONOUN_HINTS:
+        candidate = fallback_name
     if not candidate and fallback_name and any(pronoun in lowered.split() for pronoun in PRONOUN_HINTS):
         candidate = fallback_name
     if not candidate:
@@ -392,6 +394,8 @@ def resolve_player_reference(
     live_people = live_client.search_people(candidate)
     live_person = choose_best_person_match(live_people, candidate) if live_people else None
     lahman_person = find_lahman_person(connection, candidate, season or current_season)
+    if live_person is None and lahman_person is None:
+        return None
     player_name = (
         str(live_person.get("fullName") or "").strip()
         if live_person is not None
@@ -411,6 +415,18 @@ def resolve_player_reference(
 def clean_player_reference_phrase(phrase: str, metric_terms: tuple[str, ...]) -> str:
     cleaned = phrase.strip(" ?.!,'\"")
     cleaned = re.sub(r"'s\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"\b(?:through\s+)?(?:the\s+)?(?:first|last|previous|prior)\s+(?:\d+|[a-z]+)\s+(?:games?|starts?)\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\b(?:games?|starts?)\s+of\s+(?:their|his|her)?\s*(?:season|year)?\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     for term in metric_terms:
         if term:
             cleaned = re.sub(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", " ", cleaned, flags=re.IGNORECASE)

@@ -11,6 +11,16 @@ from mlb_history_bot.player_season_comparison import (
 class FakeLiveClient:
     def search_people(self, query: str):
         normalized = query.strip().casefold()
+        if normalized == "aaron judge":
+            return [
+                {
+                    "id": 592450,
+                    "fullName": "Aaron Judge",
+                    "active": True,
+                    "isPlayer": True,
+                    "isVerified": True,
+                }
+            ]
         if normalized == "pete alonso":
             return [
                 {
@@ -55,6 +65,10 @@ def test_parse_player_season_comparison_query() -> None:
     )
     connection.execute(
         "INSERT INTO lahman_people (playerid, namefirst, namelast, namegiven, debut, finalgame) VALUES (?, ?, ?, ?, ?, ?)",
+        ("judgeaa01", "Aaron", "Judge", "Aaron Judge", "2016-08-13", ""),
+    )
+    connection.execute(
+        "INSERT INTO lahman_people (playerid, namefirst, namelast, namegiven, debut, finalgame) VALUES (?, ?, ?, ?, ?, ?)",
         ("raleica01", "Cal", "Raleigh", "Cal Raleigh", "2021-07-11", ""),
     )
     catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
@@ -70,6 +84,43 @@ def test_parse_player_season_comparison_query() -> None:
     assert query.left.player_name == "Pete Alonso"
     assert query.left.season == 2022
     assert query.right.player_name == "Cal Raleigh"
+    assert query.right.season == 2025
+
+
+def test_parse_player_season_comparison_query_strips_window_phrase_and_uses_pronoun_fallback() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            namefirst TEXT,
+            namelast TEXT,
+            namegiven TEXT,
+            debut TEXT,
+            finalgame TEXT
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO lahman_people (playerid, namefirst, namelast, namegiven, debut, finalgame) VALUES (?, ?, ?, ?, ?, ?)",
+        ("judgeaa01", "Aaron", "Judge", "Aaron Judge", "2016-08-13", ""),
+    )
+    catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
+    query = parse_player_season_comparison_query(
+        connection,
+        "compare Aaron Judge's first 10 games of 2026 to his first 10 games of 2025",
+        FakeLiveClient(),
+        catalog,
+        2026,
+    )
+    connection.close()
+    assert query is not None
+    assert query.left.player_name == "Aaron Judge"
+    assert query.left.player_query == "Aaron Judge"
+    assert query.left.season == 2026
+    assert query.right.player_name == "Aaron Judge"
+    assert query.right.player_query == "Aaron Judge"
     assert query.right.season == 2025
 
 
