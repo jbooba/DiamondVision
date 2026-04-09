@@ -39,10 +39,17 @@
       background-size: auto, 44px 44px, 44px 44px, auto;
     }
 
-    .shell { max-width: 1520px; margin: 0 auto; padding: 24px 18px 32px; display: grid; gap: 18px; }
+    .shell {
+      width: min(96vw, 1880px);
+      max-width: 1880px;
+      margin: 0 auto;
+      padding: 24px 18px 32px;
+      display: grid;
+      gap: 18px;
+    }
     .hero, .workbench { display: grid; gap: 16px; }
-    .hero { grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr); }
-    .workbench { grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr); }
+    .hero { grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.95fr); }
+    .workbench { grid-template-columns: minmax(0, 1.2fr) minmax(520px, 1fr); min-height: calc(100vh - 180px); }
 
     .panel, .masthead, .status-board {
       border: 3px solid rgba(216, 210, 196, 0.24);
@@ -124,9 +131,14 @@
     }
 
     .chat-log, .queue, .evidence-stack { padding: 18px; display: grid; gap: 12px; overflow-y: auto; min-height: 0; }
-    .chat-log { max-height: 60vh; align-content: start; }
-    .queue { max-height: 26vh; padding-top: 0; }
-    .evidence-stack { max-height: none; padding-top: 16px; align-content: start; }
+    .chat-log {
+      min-height: clamp(420px, 58vh, 980px);
+      max-height: none;
+      align-content: start;
+      padding-right: 24px;
+    }
+    .queue { max-height: 30vh; padding-top: 0; }
+    .evidence-stack { max-height: none; padding-top: 16px; align-content: start; padding-right: 22px; }
 
     .entry { display: grid; gap: 10px; }
     .entry.user { justify-items: end; }
@@ -139,8 +151,8 @@
       line-height: 1.72;
     }
 
-    .entry.user .bubble { max-width: 84%; background: linear-gradient(180deg, rgba(255, 158, 87, 0.22), rgba(159, 89, 46, 0.18)); }
-    .entry.assistant .bubble { max-width: 94%; }
+    .entry.user .bubble { max-width: min(84%, 920px); background: linear-gradient(180deg, rgba(255, 158, 87, 0.22), rgba(159, 89, 46, 0.18)); }
+    .entry.assistant .bubble { max-width: min(96%, 1240px); }
     .answer-meta, .featured-meta, .queue-meta { display: flex; flex-wrap: wrap; gap: 8px; }
     .meta-pill, .featured-meta span, .queue-meta span {
       border-radius: 999px;
@@ -197,7 +209,7 @@
     .evidence-table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 440px;
+      min-width: 640px;
       font-size: 0.82rem;
     }
     .evidence-table th,
@@ -219,6 +231,7 @@
     .evidence-table .align-left { text-align: left; }
 
     @media (max-width: 1180px) {
+      .shell { width: min(98vw, 1480px); }
       .hero, .workbench { grid-template-columns: 1fr; }
       .chat-column { border-right: 0; border-bottom: 2px solid rgba(216, 210, 196, 0.08); }
     }
@@ -227,6 +240,9 @@
       .shell { padding: 16px 12px 20px; }
       .score-strip { grid-template-columns: 1fr; }
       .chat-log, .queue, .evidence-stack { max-height: none; }
+      .chat-log { min-height: 0; padding-right: 18px; }
+      .evidence-stack { padding-right: 18px; }
+      .evidence-table { min-width: 520px; }
     }
   </style>
 </head>
