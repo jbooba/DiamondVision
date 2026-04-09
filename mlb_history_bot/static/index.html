@@ -334,6 +334,7 @@
               <button class="tab" data-tab="historical">Historical</button>
               <button class="tab" data-tab="replays">Replays</button>
               <button class="tab" data-tab="live">Live</button>
+              <button class="tab" data-tab="trace">Trace</button>
             </div>
           </div>
           <div id="evidence-stack" class="evidence-stack">
@@ -363,7 +364,7 @@
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const promptButtons = Array.from(document.querySelectorAll("[data-prompt]"));
 
-    let latestEvidence = { glossary: [], historical: [], replays: [], live: [] };
+    let latestEvidence = { glossary: [], historical: [], replays: [], live: [], trace: [] };
     let latestClips = [];
     let activeTab = "glossary";
     let activeClipKey = "";
@@ -395,7 +396,10 @@
     }
 
     function totalEvidenceCount(evidence) {
-      return Object.values(evidence || {}).reduce((sum, items) => sum + (Array.isArray(items) ? items.length : 0), 0);
+      return ["glossary", "historical", "replays", "live"].reduce(
+        (sum, key) => sum + ((Array.isArray(evidence?.[key]) ? evidence[key].length : 0)),
+        0
+      );
     }
 
     function appendEntry(role, text, payload = null) {
@@ -444,6 +448,13 @@
     }
 
     function renderEvidence() {
+      if (activeTab === "trace") {
+        const traceItems = Array.isArray(latestEvidence.trace) ? latestEvidence.trace : [];
+        evidenceNode.innerHTML = traceItems.length
+          ? `<article class="evidence-card"><div class="evidence-body"><div class="evidence-kicker">Execution trace</div><div class="evidence-copy">${traceItems.map((item) => escapeHtml(item)).join("<br>")}</div></div></article>`
+          : `<div class="placeholder">No trace output was returned for the latest lookup.</div>`;
+        return;
+      }
       const items = latestEvidence[activeTab] || [];
       evidenceNode.innerHTML = items.length
         ? items.map((item) => renderEvidenceCard(item)).join("")
@@ -564,6 +575,18 @@
       classificationNode.textContent = "Scanning";
       lastQueryNode.innerHTML = `<strong>Last query:</strong> ${escapeHtml(question)}`;
       lastSummaryNode.innerHTML = `<strong>Console note:</strong> building a grounded answer now.`;
+      latestEvidence = {
+        glossary: [],
+        historical: [],
+        replays: [],
+        live: [],
+        trace: [
+          `Queued lookup: ${question}`,
+          "Sent request to backend.",
+          "Waiting for backend response...",
+        ],
+      };
+      renderEvidence();
 
       try {
         const response = await fetch("/chat", {
@@ -571,8 +594,14 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question, session_id: sessionId })
         });
-        const payload = await response.json();
-        latestEvidence = payload.evidence || { glossary: [], historical: [], replays: [], live: [] };
+        const responseText = await response.text();
+        let payload = null;
+        try {
+          payload = JSON.parse(responseText);
+        } catch (error) {
+          throw new Error(responseText || `HTTP ${response.status}`);
+        }
+        latestEvidence = payload.evidence || { glossary: [], historical: [], replays: [], live: [], trace: [] };
         evidenceCountNode.textContent = String(totalEvidenceCount(latestEvidence));
         classificationNode.textContent = (payload.classification || "unknown").replace(/^./, (match) => match.toUpperCase());
         appendEntry("assistant", payload.answer || "No answer returned.", payload);
@@ -585,7 +614,17 @@
         appendEntry("assistant", `Lookup failed: ${error}`, { classification: "error", citations: [], clips: [] });
         classificationNode.textContent = "Error";
         evidenceCountNode.textContent = "0";
-        latestEvidence = { glossary: [], historical: [], replays: [], live: [] };
+        latestEvidence = {
+          glossary: [],
+          historical: [],
+          replays: [],
+          live: [],
+          trace: [
+            `Queued lookup: ${question}`,
+            "Sent request to backend.",
+            `Lookup failed before a valid JSON response arrived: ${error}`,
+          ],
+        };
         renderEvidence();
         renderQueue([]);
       } finally {

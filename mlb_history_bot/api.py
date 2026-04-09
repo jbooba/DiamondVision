@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
                 "historical": [serialize_snippet(snippet) for snippet in result.context.historical_evidence],
                 "replays": [serialize_snippet(snippet) for snippet in result.context.replay_evidence],
                 "live": [serialize_snippet(snippet) for snippet in result.context.live_evidence],
+                "trace": list(result.context.trace),
             },
             "clips": extract_clip_cards(result.context.all_snippets()),
         }

@@ -153,11 +153,19 @@ class BaseballResearchEngine:
         self.player_window_stats_researcher = PlayerWindowStatsResearcher(settings)
         self.roster_comparison_researcher = RosterComparisonResearcher(settings)
 
+    @staticmethod
+    def _trace(context: CompiledContext, message: str) -> None:
+        context.trace.append(message)
+
     def compile_context(self, question: str) -> CompiledContext:
         classification = self._classify(question)
         context = CompiledContext(classification=classification, question=question)
+        self._trace(context, f"Classified query as {classification}.")
         glossary_matches = self.catalog.search(question, limit=4)
-        context.glossary_entries.extend(self._metric_snippets(glossary_matches))
+        glossary_snippets = self._metric_snippets(glossary_matches)
+        context.glossary_entries.extend(glossary_snippets)
+        if glossary_snippets:
+            self._trace(context, f"Loaded {len(glossary_snippets)} glossary snippet(s).")
         current_year = self.settings.live_season or date.today().year
         replay_focused = (
             parse_story_query(question, current_year) is not None
@@ -175,6 +183,7 @@ class BaseballResearchEngine:
         direct_player_lookup = self._looks_like_direct_player_lookup(question)
 
         connection = get_connection(self.settings.database_path)
+        self._trace(context, "Opened local database.")
         initialize_database(connection)
         daily_lookup_snippet = None
         live_game_snippet = None
@@ -234,6 +243,7 @@ class BaseballResearchEngine:
             if player_game_condition_snippet:
                 context.historical_evidence.append(player_game_condition_snippet)
                 context.classification = player_game_condition_snippet.payload.get("mode", context.classification)
+                self._trace(context, f"Matched {player_game_condition_snippet.source}: {player_game_condition_snippet.title}")
             player_team_relationship_snippet = self.player_team_relationship_researcher.build_snippet(connection, question)
             if player_team_relationship_snippet:
                 context.historical_evidence.append(player_team_relationship_snippet)
@@ -293,6 +303,7 @@ class BaseballResearchEngine:
             if cohort_metric_snippet:
                 context.historical_evidence.append(cohort_metric_snippet)
                 context.classification = cohort_metric_snippet.payload.get("mode", context.classification)
+                self._trace(context, f"Matched {cohort_metric_snippet.source}: {cohort_metric_snippet.title}")
             manager_era_snippet = None if cohort_metric_snippet is not None else self.manager_era_researcher.build_snippet(connection, question)
             if manager_era_snippet:
                 context.historical_evidence.append(manager_era_snippet)
@@ -395,6 +406,7 @@ class BaseballResearchEngine:
                     )
                     target_collection.append(season_metric_snippet)
                     context.classification = season_metric_snippet.payload.get("mode", context.classification)
+                    self._trace(context, f"Matched {season_metric_snippet.source}: {season_metric_snippet.title}")
             statcast_event_snippet = self.statcast_event_researcher.build_snippet(connection, question)
             if statcast_event_snippet:
                 target_collection = (
@@ -452,6 +464,7 @@ class BaseballResearchEngine:
                     else context.historical_evidence
                 )
                 target_collection.append(provider_metric_snippet)
+                self._trace(context, f"Matched {provider_metric_snippet.source}: {provider_metric_snippet.title}")
             metric_gap_snippet = (
                 None
                 if player_metric_snippet
@@ -477,6 +490,7 @@ class BaseballResearchEngine:
             )
             if metric_gap_snippet:
                 context.historical_evidence.append(metric_gap_snippet)
+                self._trace(context, f"Recorded fallback gap note: {metric_gap_snippet.title}")
             if is_drs_question(question) and wants_drs_data_lookup(question) and not date_specific_drs:
                 context.historical_evidence.extend(self.drs_helper.historical_snippets(connection, question))
             if direct_player_lookup and live_game_snippet is None and not date_specific_drs:
@@ -517,11 +531,13 @@ class BaseballResearchEngine:
                 context.historical_evidence.extend(self._document_snippets(connection, question))
         finally:
             connection.close()
+            self._trace(context, "Closed local database.")
 
         component_request = extract_component_request(question)
         story_snippets = self.film_room_researcher.build_snippets(question)
         if story_snippets:
             context.replay_evidence.extend(story_snippets)
+            self._trace(context, f"Loaded {len(story_snippets)} replay story snippet(s).")
         hr_robbery_snippets: list[EvidenceSnippet] = []
         if component_request and component_request.metric_name == "rHR":
             hr_robbery_snippets = self.hr_robbery_proxy.build_snippets(question)
@@ -575,6 +591,8 @@ class BaseballResearchEngine:
         if should_try_sporty_replay:
             sporty_replay_snippets = self.sporty_replay_finder.build_snippets(question)
             context.replay_evidence.extend(sporty_replay_snippets)
+            if sporty_replay_snippets:
+                self._trace(context, f"Loaded {len(sporty_replay_snippets)} sporty replay snippet(s).")
 
         should_try_supplemental_player_replay = (
             not context.replay_evidence
@@ -585,7 +603,10 @@ class BaseballResearchEngine:
             )
         )
         if should_try_supplemental_player_replay:
-            context.replay_evidence.extend(self.sporty_replay_finder.build_recent_player_snippets(question))
+            supplemental_replays = self.sporty_replay_finder.build_recent_player_snippets(question)
+            context.replay_evidence.extend(supplemental_replays)
+            if supplemental_replays:
+                self._trace(context, f"Loaded {len(supplemental_replays)} supplemental player replay snippet(s).")
 
         if (
             context.classification in {"live", "hybrid"}
@@ -670,6 +691,7 @@ class BaseballResearchEngine:
             context.warnings.append(
                 "The local database does not yet contain enough evidence for a grounded answer. Bootstrap and ingest the datasets first."
             )
+            self._trace(context, "No grounded snippets matched; returned insufficient-evidence warning.")
         return context
 
     def _classify(self, question: str) -> str:

@@ -537,8 +537,26 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_player_streak_records_lookup
         ON retrosheet_player_streak_records (streak_key, streak_length DESC, player_id);
+
         """
     )
+    if table_exists(connection, "retrosheet_batting"):
+        connection.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_retrosheet_batting_player_date
+            ON retrosheet_batting (id, date, gametype, stattype);
+
+            CREATE INDEX IF NOT EXISTS idx_retrosheet_batting_date_player
+            ON retrosheet_batting (date, id, gametype, stattype);
+            """
+        )
+    if table_exists(connection, "lahman_people"):
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_lahman_people_retroid_birth
+            ON lahman_people (retroid, birthmonth, birthday)
+            """
+        )
     connection.commit()
 
 

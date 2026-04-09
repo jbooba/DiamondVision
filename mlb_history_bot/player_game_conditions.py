@@ -158,9 +158,9 @@ def fetch_hitting_condition_rows(connection, query: PlayerGameConditionQuery) ->
             SUM(CAST(COALESCE(b.b_sf, '0') AS INTEGER)) AS sacrifice_flies
         FROM retrosheet_batting AS b
         JOIN lahman_people AS p
-          ON lower(COALESCE(p.retroid, '')) = lower(COALESCE(b.id, ''))
-        WHERE COALESCE(b.stattype, 'value') = 'value'
-          AND COALESCE(b.gametype, 'regular') IN ('R', 'regular')
+          ON p.retroid = b.id
+        WHERE b.stattype = 'value'
+          AND b.gametype IN ('R', 'regular')
           AND COALESCE(p.birthmonth, '') <> ''
           AND COALESCE(p.birthday, '') <> ''
           AND CAST(substr(b.date, 1, 4) AS INTEGER) BETWEEN ? AND ?
