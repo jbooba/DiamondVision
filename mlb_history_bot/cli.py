@@ -102,6 +102,16 @@ def build_parser() -> argparse.ArgumentParser:
     statcast_history_parser.add_argument("--batter-csv", type=Path)
     statcast_history_parser.add_argument("--pitcher-csv", type=Path)
 
+    bundled_statcast_history_parser = subparsers.add_parser(
+        "import-bundled-statcast-history",
+        help="Import the bundled Statcast custom leaderboard history CSV exports from the repo",
+    )
+    bundled_statcast_history_parser.add_argument(
+        "--data-dir",
+        type=Path,
+        help="Optional override for the bundled CSV directory (defaults to data/statcast_history)",
+    )
+
     retrosheet_split_parser = subparsers.add_parser(
         "sync-retrosheet-splits",
         help="Build compact team-game situational split aggregates from Retrosheet plays",
@@ -268,6 +278,25 @@ def main() -> int:
                 connection,
                 batter_csv=args.batter_csv,
                 pitcher_csv=args.pitcher_csv,
+            )
+        finally:
+            connection.close()
+        for message in messages:
+            print(message)
+        return 0
+
+    if args.command == "import-bundled-statcast-history":
+        data_dir = args.data_dir or (settings.project_root / "data" / "statcast_history")
+        batter_csv = data_dir / "Batter_Stats_Statcast_History.csv"
+        pitcher_csv = data_dir / "Pitcher_Stats_Statcast_History.csv"
+        if not batter_csv.exists() and not pitcher_csv.exists():
+            raise SystemExit(f"No bundled Statcast history CSVs found in {data_dir}")
+        connection = get_connection(settings.database_path)
+        try:
+            messages = import_statcast_history_exports(
+                connection,
+                batter_csv=batter_csv if batter_csv.exists() else None,
+                pitcher_csv=pitcher_csv if pitcher_csv.exists() else None,
             )
         finally:
             connection.close()

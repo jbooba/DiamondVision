@@ -151,6 +151,23 @@ The current Statcast sync also writes:
 - `statcast_batter_pitch_type_games`: per-batter, per-game, per-pitch-type summaries for batter-vs-pitch-family questions
 - `statcast_events`: a compact final-pitch event index for park, direction, location, batter, pitcher, and pitch-family filters
 
+The repo also includes bundled season-level Statcast custom leaderboard history exports at:
+
+- `data/statcast_history/Batter_Stats_Statcast_History.csv`
+- `data/statcast_history/Pitcher_Stats_Statcast_History.csv`
+
+To import those bundled files into the SQLite database:
+
+```powershell
+python -m mlb_history_bot import-bundled-statcast-history
+```
+
+Or import specific local copies manually:
+
+```powershell
+python -m mlb_history_bot import-statcast-history --batter-csv C:\path\to\Batter_Stats_Statcast_History.csv --pitcher-csv C:\path\to\Pitcher_Stats_Statcast_History.csv
+```
+
 For a lightweight daily refresh of the current season with a small overlap for corrections:
 
 ```powershell
@@ -218,6 +235,13 @@ This repo is set up to deploy on Railway with the included `Dockerfile`, `railwa
 Recommended Railway setup:
 
 1. Create a volume and mount it at `/data`.
+2. After the app is deployed, import the bundled Statcast history exports once:
+
+```bash
+python -m mlb_history_bot import-bundled-statcast-history
+```
+
+That command reads the CSVs bundled in the repo at `/app/data/statcast_history/` and writes them into the mounted SQLite database on `/data/processed/mlb_history.sqlite3`.
 2. Set `OPENAI_API_KEY`.
 3. Optionally set `MLB_HISTORY_LIVE_SEASON` if you want to pin the current live season.
 4. Leave the defaults alone for:
