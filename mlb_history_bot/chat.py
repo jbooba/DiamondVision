@@ -20,6 +20,7 @@ Rules:
 - When a metric is proprietary or not exactly computable from public inputs, say that clearly.
 - Keep the answer concise but analytical.
 - Use plain text only. Do not use Markdown emphasis, bold markers, italics, or bullet syntax that relies on Markdown rendering.
+- If a payload says the leaderboard is complete and the rows are only a display slice, do not describe the evidence as partial or incomplete.
 - End every answer with a 'Sources:' line listing the evidence labels you used.
 """
 

@@ -64,6 +64,7 @@ class PlayerGameConditionResearcher:
         if not rows:
             return None
         summary = build_player_game_condition_summary(query, rows)
+        display_rows = rows[:12]
         return EvidenceSnippet(
             source="Retrosheet Player Game Conditions",
             title=f"{query.condition.label} {query.metric.label} leaderboard",
@@ -78,7 +79,17 @@ class PlayerGameConditionResearcher:
                 "metric": query.metric.label,
                 "role": query.metric.role,
                 "scope_label": query.scope_label,
-                "rows": rows[:12],
+                "rows": display_rows,
+                "displayed_row_count": len(display_rows),
+                "total_row_count": len(rows),
+                "leaderboard_complete": True,
+                "leaderboard_scope_note": (
+                    "This leaderboard was computed from the full local condition-matched game log dataset. "
+                    "The rows array is only the top display slice."
+                ),
+                "max_condition_games": max((safe_int(row["condition_games"]) or 0) for row in rows),
+                "max_plate_appearances": max((safe_int(row["plate_appearances"]) or 0) for row in rows),
+                "max_at_bats": max((safe_int(row["at_bats"]) or 0) for row in rows),
             },
         )
 
@@ -261,4 +272,9 @@ def build_player_game_condition_summary(query: PlayerGameConditionQuery, rows: l
             for row in trailing
         )
         summary = f"{summary} Next on the board: {trailing_text}."
+    if len(rows) > 12:
+        summary = (
+            f"{summary} This result was ranked against the full local leaderboard; "
+            f"only the top {min(12, len(rows))} rows are shown in the evidence table."
+        )
     return summary

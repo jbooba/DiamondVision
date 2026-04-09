@@ -98,3 +98,16 @@ def test_birthday_condition_home_run_leaderboard_supports_specific_season() -> N
     assert snippet is not None
     assert snippet.payload["rows"][0]["player_name"] == "Beta Slugger"
     assert snippet.payload["rows"][0]["home_runs"] == 1
+
+
+def test_birthday_condition_payload_marks_full_leaderboard_metadata() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(connection, "which hitter has the highest OPS when playing on their birthday")
+    connection.close()
+    assert snippet is not None
+    assert snippet.payload["leaderboard_complete"] is True
+    assert snippet.payload["displayed_row_count"] == len(snippet.payload["rows"])
+    assert snippet.payload["total_row_count"] >= snippet.payload["displayed_row_count"]
+    assert snippet.payload["max_plate_appearances"] == 9
+    assert "top display slice" in snippet.payload["leaderboard_scope_note"]
