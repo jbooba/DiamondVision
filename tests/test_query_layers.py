@@ -28,7 +28,7 @@ from mlb_history_bot.query_utils import (
 )
 from mlb_history_bot.roster_comparison import parse_roster_comparison_query
 from mlb_history_bot.season_comparison import parse_season_comparison_query
-from mlb_history_bot.special_leaderboards import parse_award_opponent_gap_query, parse_birthday_home_run_query
+from mlb_history_bot.special_leaderboards import parse_award_opponent_gap_query
 from mlb_history_bot.statcast_event_leaderboards import parse_statcast_event_query
 from mlb_history_bot.statcast_team_history import parse_statcast_team_window_query
 from mlb_history_bot.team_season_compare import clean_team_phrase
@@ -554,12 +554,6 @@ def test_home_run_robbery_alias_for_robbed_home_runs() -> None:
     assert component.metric_name == "rHR"
 
 
-def test_parse_birthday_home_run_query() -> None:
-    query = parse_birthday_home_run_query("Which player has hit the most home runs on their birthday?")
-    assert query is not None
-    assert query.sort_desc is True
-
-
 def test_parse_award_opponent_gap_query() -> None:
     catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
     query = parse_award_opponent_gap_query(
@@ -568,7 +562,7 @@ def test_parse_award_opponent_gap_query() -> None:
     )
     assert query is not None
     assert query.metric_name == "OPS"
-    assert query.award_label == "Cy Young winners"
+    assert query.award_label == "Cy Young Award winners"
 
 
 def test_parse_award_opponent_gap_query_for_mvp() -> None:

@@ -427,21 +427,6 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 top_players,
             )
 
-    if analysis_type == "birthday_home_run_leaderboard":
-        leaders = payload.get("leaders")
-        if isinstance(leaders, list):
-            return build_table_display(
-                [
-                    {"key": "rank", "label": "#", "align": "right"},
-                    {"key": "player_name", "label": "Player", "align": "left"},
-                    {"key": "total", "label": "Birthday HR", "align": "right"},
-                    {"key": "birthday_games", "label": "Birthday G", "align": "right"},
-                    {"key": "first_season", "label": "First", "align": "right"},
-                    {"key": "last_season", "label": "Last", "align": "right"},
-                ],
-                leaders,
-            )
-
     if analysis_type == "player_game_condition_leaderboard":
         rows = payload.get("rows")
         metric_label = str(payload.get("metric") or "Metric")
