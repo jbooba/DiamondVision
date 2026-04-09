@@ -452,6 +452,27 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (player_id, cohort_kind, cohort_value)
         );
 
+        CREATE TABLE IF NOT EXISTS retrosheet_player_opponent_pitchers (
+            player_id TEXT NOT NULL,
+            pitcher_id TEXT NOT NULL,
+            plate_appearances INTEGER NOT NULL DEFAULT 0,
+            at_bats INTEGER NOT NULL DEFAULT 0,
+            hits INTEGER NOT NULL DEFAULT 0,
+            doubles INTEGER NOT NULL DEFAULT 0,
+            triples INTEGER NOT NULL DEFAULT 0,
+            home_runs INTEGER NOT NULL DEFAULT 0,
+            walks INTEGER NOT NULL DEFAULT 0,
+            intentional_walks INTEGER NOT NULL DEFAULT 0,
+            hit_by_pitch INTEGER NOT NULL DEFAULT 0,
+            sacrifice_flies INTEGER NOT NULL DEFAULT 0,
+            strikeouts INTEGER NOT NULL DEFAULT 0,
+            runs_batted_in INTEGER NOT NULL DEFAULT 0,
+            first_season INTEGER NOT NULL DEFAULT 0,
+            last_season INTEGER NOT NULL DEFAULT 0,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (player_id, pitcher_id)
+        );
+
         CREATE TABLE IF NOT EXISTS retrosheet_player_streak_records (
             player_id TEXT NOT NULL,
             streak_key TEXT NOT NULL,
@@ -563,6 +584,9 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_player_opponent_pitcher_cohorts_lookup
         ON retrosheet_player_opponent_pitcher_cohorts (cohort_kind, cohort_value, plate_appearances DESC, player_id);
+
+        CREATE INDEX IF NOT EXISTS idx_retrosheet_player_opponent_pitchers_pitcher
+        ON retrosheet_player_opponent_pitchers (pitcher_id, plate_appearances DESC, player_id);
 
         CREATE INDEX IF NOT EXISTS idx_retrosheet_player_streak_records_lookup
         ON retrosheet_player_streak_records (streak_key, streak_length DESC, player_id);
@@ -1555,6 +1579,12 @@ def clear_retrosheet_player_opponent_pitcher_cohorts(connection: sqlite3.Connect
     connection.commit()
 
 
+def clear_retrosheet_player_opponent_pitchers(connection: sqlite3.Connection) -> None:
+    initialize_database(connection)
+    connection.execute("DELETE FROM retrosheet_player_opponent_pitchers")
+    connection.commit()
+
+
 def clear_retrosheet_player_streak_records(connection: sqlite3.Connection) -> None:
     initialize_database(connection)
     connection.execute("DELETE FROM retrosheet_player_streak_records")
@@ -1911,6 +1941,78 @@ def upsert_retrosheet_player_opponent_pitcher_cohorts(
             strikeouts = excluded.strikeouts,
             runs_batted_in = excluded.runs_batted_in,
             pitchers_faced = excluded.pitchers_faced,
+            first_season = excluded.first_season,
+            last_season = excluded.last_season,
+            imported_at = CURRENT_TIMESTAMP
+        """,
+        normalized_rows,
+    )
+    connection.commit()
+    return len(normalized_rows)
+
+
+def upsert_retrosheet_player_opponent_pitchers(
+    connection: sqlite3.Connection,
+    rows: Iterable[dict[str, Any]],
+) -> int:
+    initialize_database(connection)
+    normalized_rows = [
+        (
+            str(row.get("player_id") or ""),
+            str(row.get("pitcher_id") or ""),
+            _coerce_int(row.get("plate_appearances")),
+            _coerce_int(row.get("at_bats")),
+            _coerce_int(row.get("hits")),
+            _coerce_int(row.get("doubles")),
+            _coerce_int(row.get("triples")),
+            _coerce_int(row.get("home_runs")),
+            _coerce_int(row.get("walks")),
+            _coerce_int(row.get("intentional_walks")),
+            _coerce_int(row.get("hit_by_pitch")),
+            _coerce_int(row.get("sacrifice_flies")),
+            _coerce_int(row.get("strikeouts")),
+            _coerce_int(row.get("runs_batted_in")),
+            _coerce_int(row.get("first_season")),
+            _coerce_int(row.get("last_season")),
+        )
+        for row in rows
+        if row.get("player_id") and row.get("pitcher_id")
+    ]
+    if not normalized_rows:
+        return 0
+    connection.executemany(
+        """
+        INSERT INTO retrosheet_player_opponent_pitchers (
+            player_id,
+            pitcher_id,
+            plate_appearances,
+            at_bats,
+            hits,
+            doubles,
+            triples,
+            home_runs,
+            walks,
+            intentional_walks,
+            hit_by_pitch,
+            sacrifice_flies,
+            strikeouts,
+            runs_batted_in,
+            first_season,
+            last_season
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(player_id, pitcher_id) DO UPDATE SET
+            plate_appearances = excluded.plate_appearances,
+            at_bats = excluded.at_bats,
+            hits = excluded.hits,
+            doubles = excluded.doubles,
+            triples = excluded.triples,
+            home_runs = excluded.home_runs,
+            walks = excluded.walks,
+            intentional_walks = excluded.intentional_walks,
+            hit_by_pitch = excluded.hit_by_pitch,
+            sacrifice_flies = excluded.sacrifice_flies,
+            strikeouts = excluded.strikeouts,
+            runs_batted_in = excluded.runs_batted_in,
             first_season = excluded.first_season,
             last_season = excluded.last_season,
             imported_at = CURRENT_TIMESTAMP

@@ -9,7 +9,7 @@ from .award_history import AwardHistoryResearcher
 from .config import Settings
 from .cohort_metric_leaderboards import CohortMetricLeaderboardResearcher
 from .cohort_timeline import parse_cohort_filter
-from .contextual_performance import ContextualPerformanceResearcher
+from .contextual_performance import ContextualPerformanceResearcher, parse_opponent_pitcher_cohort_query
 from .daily_lookup import DailyLookupResearcher, wants_historical_calendar_day_leaderboard
 from .fielding_bible_search import (
     DrsResearchHelper,
@@ -187,6 +187,7 @@ class BaseballResearchEngine:
         yearless_month_day = question_mentions_yearless_month_day(question)
         visual_query = any(token in question.lower() for token in VISUAL_HINTS)
         cohort_filter_requested = parse_cohort_filter(question) is not None
+        opponent_pitcher_cohort_requested = parse_opponent_pitcher_cohort_query(question) is not None
         direct_player_lookup = self._looks_like_direct_player_lookup(question)
 
         connection = get_connection(self.settings.database_path)
@@ -313,6 +314,7 @@ class BaseballResearchEngine:
             player_season_snippet = (
                 None
                 if player_start_comparison_snippet is not None or player_season_comparison_snippet is not None
+                or opponent_pitcher_cohort_requested
                 else self.player_season_researcher.build_snippet(question, connection)
             )
             if player_season_snippet:
@@ -407,6 +409,7 @@ class BaseballResearchEngine:
             special_leaderboard_snippet = (
                 None
                 if player_game_condition_snippet is not None
+                or opponent_pitcher_cohort_requested
                 else self.special_leaderboard_researcher.build_snippet(connection, question)
             )
             if special_leaderboard_snippet:

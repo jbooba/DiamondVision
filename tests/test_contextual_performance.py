@@ -13,6 +13,7 @@ from mlb_history_bot.config import Settings
 from mlb_history_bot.storage import (
     initialize_database,
     upsert_retrosheet_player_count_splits,
+    upsert_retrosheet_player_opponent_pitchers,
     upsert_retrosheet_player_opponent_pitcher_cohorts,
     upsert_retrosheet_player_reached_count_splits,
 )
@@ -290,6 +291,15 @@ def test_parse_opponent_pitcher_cohort_query_for_cy_young_winners() -> None:
     assert query.metric_key == "ops"
 
 
+def test_parse_opponent_pitcher_cohort_query_for_left_handed_pitchers() -> None:
+    query = parse_opponent_pitcher_cohort_query("which hitter has the best OPS against left-handed pitchers?")
+    assert query is not None
+    assert query.cohort_kind == "throw_handedness"
+    assert query.metric_key == "ops"
+    assert query.cohort_filter is not None
+    assert query.cohort_filter.kind == "throw_handedness"
+
+
 def test_opponent_pitcher_cohort_snippet() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
@@ -346,3 +356,97 @@ def test_opponent_pitcher_cohort_snippet() -> None:
     assert snippet is not None
     assert snippet.source == "Opponent Pitcher Cohorts"
     assert snippet.payload["leaders"][0]["player_name"] == "Slugger One"
+
+
+def test_opponent_pitcher_cohort_snippet_uses_generic_pitcher_matchups() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    initialize_database(connection)
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            retroid TEXT,
+            namefirst TEXT,
+            namelast TEXT,
+            throws TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE lahman_pitching (
+            playerid TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_allplayers (
+            id TEXT,
+            first TEXT,
+            last TEXT
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO lahman_people VALUES (?,?,?,?,?)",
+        [
+            ("slug001", "slug001", "Slugger", "One", None),
+            ("pitchl1", "pitchl1", "Lefty", "Ace", "L"),
+            ("pitchr1", "pitchr1", "Righty", "Ace", "R"),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO lahman_pitching VALUES (?)",
+        [("pitchl1",), ("pitchr1",)],
+    )
+    connection.execute("INSERT INTO retrosheet_allplayers VALUES ('slug001','Slugger','One')")
+    upsert_retrosheet_player_opponent_pitchers(
+        connection,
+        [
+            {
+                "player_id": "slug001",
+                "pitcher_id": "pitchl1",
+                "plate_appearances": 40,
+                "at_bats": 30,
+                "hits": 12,
+                "doubles": 2,
+                "triples": 0,
+                "home_runs": 3,
+                "walks": 8,
+                "intentional_walks": 1,
+                "hit_by_pitch": 0,
+                "sacrifice_flies": 1,
+                "strikeouts": 4,
+                "runs_batted_in": 12,
+                "first_season": 2021,
+                "last_season": 2025,
+            },
+            {
+                "player_id": "slug001",
+                "pitcher_id": "pitchr1",
+                "plate_appearances": 20,
+                "at_bats": 18,
+                "hits": 2,
+                "doubles": 0,
+                "triples": 0,
+                "home_runs": 0,
+                "walks": 1,
+                "intentional_walks": 0,
+                "hit_by_pitch": 0,
+                "sacrifice_flies": 0,
+                "strikeouts": 7,
+                "runs_batted_in": 1,
+                "first_season": 2021,
+                "last_season": 2025,
+            },
+        ],
+    )
+    researcher = ContextualPerformanceResearcher(Settings.from_env())
+    snippet = researcher.build_snippet(connection, "which hitter has the best OPS against left-handed pitchers?")
+    connection.close()
+    assert snippet is not None
+    assert snippet.source == "Opponent Pitcher Cohorts"
+    assert snippet.payload["leaders"][0]["player_name"] == "Slugger One"
+    assert snippet.payload["leaders"][0]["pitchers_faced"] == 1

@@ -8,13 +8,15 @@ from typing import Any
 import pandas as pd
 
 from .award_history import AWARD_DEFINITIONS_BY_KEY
-from .cohort_timeline import load_award_identities, parse_cohort_filter
+from .cohort_timeline import CohortFilter, load_award_identities, parse_cohort_filter
+from .cohort_timeline import resolve_cohort_filter
 from .config import Settings
 from .metrics import MetricCatalog
 from .models import EvidenceSnippet
 from .retrosheet_splits import open_retrosheet_plays_stream
 from .storage import (
     clear_retrosheet_player_count_splits,
+    clear_retrosheet_player_opponent_pitchers,
     clear_retrosheet_player_opponent_pitcher_cohorts,
     clear_retrosheet_player_reached_count_splits,
     clear_retrosheet_player_opponent_contexts,
@@ -23,6 +25,7 @@ from .storage import (
     set_metadata_value,
     table_exists,
     upsert_retrosheet_player_count_splits,
+    upsert_retrosheet_player_opponent_pitchers,
     upsert_retrosheet_player_opponent_pitcher_cohorts,
     upsert_retrosheet_player_reached_count_splits,
     upsert_retrosheet_player_opponent_contexts,
@@ -174,6 +177,7 @@ class OpponentPitcherCohortQuery:
     sort_desc: bool
     min_sample_size: int
     sample_basis: str | None
+    cohort_filter: CohortFilter | None = None
 
 
 CONTEXT_METRIC_SPECS = (
@@ -652,94 +656,144 @@ def parse_opponent_pitcher_cohort_query(question: str) -> OpponentPitcherCohortQ
     if not any(token in lowered for token in RELATIONAL_OPPONENT_HINTS):
         return None
     cohort_filter = parse_cohort_filter(question)
-    if cohort_filter is None or cohort_filter.kind != "award_winner" or not cohort_filter.award_key:
+    if cohort_filter is None or cohort_filter.kind in {"manager_era", "bat_handedness"}:
         return None
-    definition = AWARD_DEFINITIONS_BY_KEY.get(cohort_filter.award_key)
-    if definition is None or definition.role_label != "pitchers":
-        return None
+    cohort_kind = cohort_filter.kind
+    cohort_value = cohort_filter.label.lower()
+    if cohort_filter.kind == "award_winner":
+        if not cohort_filter.award_key:
+            return None
+        definition = AWARD_DEFINITIONS_BY_KEY.get(cohort_filter.award_key)
+        if definition is None or definition.role_label not in {"pitchers", "players"}:
+            return None
+        cohort_kind = "award"
+        cohort_value = cohort_filter.award_key
     metric_spec = detect_context_metric_spec(
         lowered,
         default_key="ops" if any(token in lowered for token in OFFENSIVE_SUMMARY_HINTS) else "ops",
     )
     descriptor, sort_desc = resolve_metric_sort(lowered, metric_spec)
     return OpponentPitcherCohortQuery(
-        cohort_kind="award",
-        cohort_value=cohort_filter.award_key,
+        cohort_kind=cohort_kind,
+        cohort_value=cohort_value,
         cohort_label=cohort_filter.label,
         metric_key=metric_spec.key,
         descriptor=descriptor,
         sort_desc=sort_desc,
         min_sample_size=metric_spec.min_sample_size,
         sample_basis=metric_spec.sample_basis,
+        cohort_filter=cohort_filter,
     )
 
 
-def build_pitcher_cohort_metric_expression(metric_key: str) -> str:
-    walks_expression = "(cohort.walks + cohort.intentional_walks)"
-    singles_expression = "(cohort.hits - cohort.doubles - cohort.triples - cohort.home_runs)"
+def build_pitcher_cohort_metric_expression(metric_key: str, alias: str = "cohort", *, aggregate: bool = False) -> str:
+    def field(name: str) -> str:
+        base = f"{alias}.{name}"
+        return f"SUM({base})" if aggregate else base
+
+    walks_expression = f"({field('walks')} + {field('intentional_walks')})"
+    singles_expression = f"({field('hits')} - {field('doubles')} - {field('triples')} - {field('home_runs')})"
     total_bases_expression = (
-        f"({singles_expression} + (2 * cohort.doubles) + (3 * cohort.triples) + (4 * cohort.home_runs))"
+        f"({singles_expression} + (2 * {field('doubles')}) + (3 * {field('triples')}) + (4 * {field('home_runs')}))"
     )
     if metric_key == "ba":
-        return "CAST(cohort.hits AS REAL) / NULLIF(cohort.at_bats, 0)"
+        return f"CAST({field('hits')} AS REAL) / NULLIF({field('at_bats')}, 0)"
     if metric_key == "obp":
         return (
-            f"CAST(cohort.hits + {walks_expression} + cohort.hit_by_pitch AS REAL) "
-            f"/ NULLIF(cohort.at_bats + {walks_expression} + cohort.hit_by_pitch + cohort.sacrifice_flies, 0)"
+            f"CAST({field('hits')} + {walks_expression} + {field('hit_by_pitch')} AS REAL) "
+            f"/ NULLIF({field('at_bats')} + {walks_expression} + {field('hit_by_pitch')} + {field('sacrifice_flies')}, 0)"
         )
     if metric_key == "slg":
-        return f"CAST({total_bases_expression} AS REAL) / NULLIF(cohort.at_bats, 0)"
+        return f"CAST({total_bases_expression} AS REAL) / NULLIF({field('at_bats')}, 0)"
     if metric_key == "ops":
         return (
             "("
-            f"CAST(cohort.hits + {walks_expression} + cohort.hit_by_pitch AS REAL) "
-            f"/ NULLIF(cohort.at_bats + {walks_expression} + cohort.hit_by_pitch + cohort.sacrifice_flies, 0)"
+            f"CAST({field('hits')} + {walks_expression} + {field('hit_by_pitch')} AS REAL) "
+            f"/ NULLIF({field('at_bats')} + {walks_expression} + {field('hit_by_pitch')} + {field('sacrifice_flies')}, 0)"
             ") + ("
-            f"CAST({total_bases_expression} AS REAL) / NULLIF(cohort.at_bats, 0)"
+            f"CAST({total_bases_expression} AS REAL) / NULLIF({field('at_bats')}, 0)"
             ")"
         )
     column_map = {
-        "home_runs": "cohort.home_runs",
-        "hits": "cohort.hits",
+        "home_runs": field("home_runs"),
+        "hits": field("hits"),
         "walks": walks_expression,
-        "strikeouts": "cohort.strikeouts",
-        "runs_batted_in": "cohort.runs_batted_in",
-        "doubles": "cohort.doubles",
-        "triples": "cohort.triples",
-        "plate_appearances": "cohort.plate_appearances",
-        "at_bats": "cohort.at_bats",
-        "hit_by_pitch": "cohort.hit_by_pitch",
+        "strikeouts": field("strikeouts"),
+        "runs_batted_in": field("runs_batted_in"),
+        "doubles": field("doubles"),
+        "triples": field("triples"),
+        "plate_appearances": field("plate_appearances"),
+        "at_bats": field("at_bats"),
+        "hit_by_pitch": field("hit_by_pitch"),
     }
-    column = column_map.get(metric_key, "cohort.home_runs")
+    column = column_map.get(metric_key, field("home_runs"))
     return f"CAST({column} AS REAL)"
 
 
+def build_contextual_player_name_sql(connection, table_alias: str) -> tuple[str, str, str]:
+    cte_parts: list[str] = []
+    joins: list[str] = []
+    name_parts: list[str] = []
+    if table_exists(connection, "lahman_people"):
+        cte_parts.append(
+            """
+            player_names AS (
+                SELECT
+                    playerid,
+                    NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
+                FROM lahman_people
+                WHERE COALESCE(playerid, '') <> ''
+            )
+            """
+        )
+        joins.append(
+            f"""
+            LEFT JOIN player_names
+              ON player_names.playerid = {table_alias}.player_id
+            """
+        )
+        name_parts.append("player_names.player_name")
+    if table_exists(connection, "retrosheet_allplayers"):
+        cte_parts.append(
+            """
+            retro_names AS (
+                SELECT
+                    lower(COALESCE(id, '')) AS retroid,
+                    NULLIF(TRIM(COALESCE(first, '') || ' ' || COALESCE(last, '')), '') AS player_name
+                FROM retrosheet_allplayers
+                GROUP BY lower(COALESCE(id, ''))
+            )
+            """
+        )
+        joins.append(
+            f"""
+            LEFT JOIN retro_names
+              ON retro_names.retroid = lower({table_alias}.player_id)
+            """
+        )
+        name_parts.append("retro_names.player_name")
+    fallback_name = f"{table_alias}.player_id"
+    name_parts.append(fallback_name)
+    cte_sql = f"WITH {','.join(cte_parts)}" if cte_parts else ""
+    joins_sql = "\n".join(joins)
+    name_expression = fallback_name if len(name_parts) == 1 else f"COALESCE({', '.join(name_parts)})"
+    return cte_sql, joins_sql, name_expression
+
+
 def fetch_opponent_pitcher_cohort_rows(connection, query: OpponentPitcherCohortQuery) -> list[dict[str, Any]]:
-    metric_expression = build_pitcher_cohort_metric_expression(query.metric_key)
+    metric_expression = build_pitcher_cohort_metric_expression(query.metric_key, "cohort")
     qualification_clause = "AND 1 = 1"
     parameters: list[Any] = [query.cohort_kind, query.cohort_value]
     if query.sample_basis and query.min_sample_size > 0:
         qualification_clause = f"AND cohort.{query.sample_basis} >= ?"
         parameters.append(query.min_sample_size)
     order_direction = "DESC" if query.sort_desc else "ASC"
+    cte_sql, joins_sql, name_expression = build_contextual_player_name_sql(connection, "cohort")
     rows = connection.execute(
         f"""
-        WITH player_names AS (
-            SELECT
-                playerid,
-                NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
-            FROM lahman_people
-            WHERE COALESCE(playerid, '') <> ''
-        ),
-        retro_names AS (
-            SELECT
-                lower(COALESCE(id, '')) AS retroid,
-                NULLIF(TRIM(COALESCE(first, '') || ' ' || COALESCE(last, '')), '') AS player_name
-            FROM retrosheet_allplayers
-            GROUP BY lower(COALESCE(id, ''))
-        )
+        {cte_sql}
         SELECT
-            COALESCE(player_names.player_name, retro_names.player_name, cohort.player_id) AS player_name,
+            {name_expression} AS player_name,
             cohort.plate_appearances,
             cohort.at_bats,
             cohort.hits,
@@ -757,15 +811,121 @@ def fetch_opponent_pitcher_cohort_rows(connection, query: OpponentPitcherCohortQ
             cohort.last_season,
             {metric_expression} AS metric_value
         FROM retrosheet_player_opponent_pitcher_cohorts AS cohort
-        LEFT JOIN player_names
-          ON player_names.playerid = cohort.player_id
-        LEFT JOIN retro_names
-          ON retro_names.retroid = lower(cohort.player_id)
+        {joins_sql}
         WHERE cohort.cohort_kind = ?
           AND cohort.cohort_value = ?
           {qualification_clause}
           AND ({metric_expression}) IS NOT NULL
         ORDER BY metric_value {order_direction}, cohort.plate_appearances DESC, player_name ASC
+        LIMIT 5
+        """,
+        tuple(parameters),
+    ).fetchall()
+    return [
+        {
+            "player_name": str(row["player_name"]),
+            "plate_appearances": int(row["plate_appearances"]),
+            "at_bats": int(row["at_bats"]),
+            "hits": int(row["hits"]),
+            "doubles": int(row["doubles"]),
+            "triples": int(row["triples"]),
+            "home_runs": int(row["home_runs"]),
+            "walks": int(row["walks"]),
+            "intentional_walks": int(row["intentional_walks"]),
+            "hit_by_pitch": int(row["hit_by_pitch"]),
+            "sacrifice_flies": int(row["sacrifice_flies"]),
+            "strikeouts": int(row["strikeouts"]),
+            "runs_batted_in": int(row["runs_batted_in"]),
+            "pitchers_faced": int(row["pitchers_faced"]),
+            "first_season": int(row["first_season"]),
+            "last_season": int(row["last_season"]),
+            "metric_value": float(row["metric_value"]),
+        }
+        for row in rows
+    ]
+
+
+def resolve_opponent_pitcher_retroids(connection, query: OpponentPitcherCohortQuery) -> set[str]:
+    cohort_filter = query.cohort_filter
+    if cohort_filter is None:
+        return set()
+    resolved = resolve_cohort_filter(connection, cohort_filter)
+    if resolved is None:
+        return set()
+    if not (table_exists(connection, "lahman_people") and table_exists(connection, "lahman_pitching")):
+        return set()
+    clauses = ["COALESCE(people.retroid, '') <> ''"]
+    parameters: list[Any] = []
+    identity_clauses: list[str] = []
+    if resolved.player_ids:
+        placeholders = ",".join("?" for _ in resolved.player_ids)
+        identity_clauses.append(f"people.playerid IN ({placeholders})")
+        parameters.extend(sorted(resolved.player_ids))
+    if resolved.player_names:
+        placeholders = ",".join("?" for _ in resolved.player_names)
+        identity_clauses.append(
+            "lower(trim(COALESCE(people.namefirst, '') || ' ' || COALESCE(people.namelast, ''))) "
+            f"IN ({placeholders})"
+        )
+        parameters.extend(sorted(resolved.player_names))
+    if identity_clauses:
+        clauses.append("(" + " OR ".join(identity_clauses) + ")")
+    rows = connection.execute(
+        f"""
+        SELECT DISTINCT lower(COALESCE(people.retroid, '')) AS retroid
+        FROM lahman_people AS people
+        JOIN lahman_pitching AS pitching
+          ON pitching.playerid = people.playerid
+        WHERE {' AND '.join(clauses)}
+        """,
+        tuple(parameters),
+    ).fetchall()
+    return {str(row["retroid"] or "").strip() for row in rows if str(row["retroid"] or "").strip()}
+
+
+def fetch_opponent_pitcher_rows(
+    connection,
+    query: OpponentPitcherCohortQuery,
+    pitcher_retroids: set[str],
+) -> list[dict[str, Any]]:
+    if not pitcher_retroids:
+        return []
+    placeholders = ",".join("?" for _ in pitcher_retroids)
+    metric_expression = build_pitcher_cohort_metric_expression(query.metric_key, "matchup", aggregate=True)
+    parameters: list[Any] = list(sorted(pitcher_retroids))
+    having_clauses = [f"({metric_expression}) IS NOT NULL"]
+    if query.sample_basis and query.min_sample_size > 0:
+        having_clauses.append(f"SUM(matchup.{query.sample_basis}) >= ?")
+        parameters.append(query.min_sample_size)
+    order_direction = "DESC" if query.sort_desc else "ASC"
+    cte_sql, joins_sql, name_expression = build_contextual_player_name_sql(connection, "matchup")
+    rows = connection.execute(
+        f"""
+        {cte_sql}
+        SELECT
+            {name_expression} AS player_name,
+            SUM(matchup.plate_appearances) AS plate_appearances,
+            SUM(matchup.at_bats) AS at_bats,
+            SUM(matchup.hits) AS hits,
+            SUM(matchup.doubles) AS doubles,
+            SUM(matchup.triples) AS triples,
+            SUM(matchup.home_runs) AS home_runs,
+            SUM(matchup.walks) AS walks,
+            SUM(matchup.intentional_walks) AS intentional_walks,
+            SUM(matchup.hit_by_pitch) AS hit_by_pitch,
+            SUM(matchup.sacrifice_flies) AS sacrifice_flies,
+            SUM(matchup.strikeouts) AS strikeouts,
+            SUM(matchup.runs_batted_in) AS runs_batted_in,
+            COUNT(DISTINCT matchup.pitcher_id) AS pitchers_faced,
+            MIN(matchup.first_season) AS first_season,
+            MAX(matchup.last_season) AS last_season,
+            {metric_expression} AS metric_value
+        FROM retrosheet_player_opponent_pitchers AS matchup
+        {joins_sql}
+        WHERE matchup.pitcher_id IN ({placeholders})
+        GROUP BY matchup.player_id
+        HAVING {' AND '.join(having_clauses)}
+        ORDER BY metric_value {order_direction}, SUM(matchup.plate_appearances) DESC, player_name ASC
         LIMIT 5
         """,
         tuple(parameters),
@@ -801,7 +961,7 @@ def build_opponent_pitcher_cohort_gap_snippet(query: OpponentPitcherCohortQuery)
         citation="Historical opponent-pitcher cohort planner",
         summary=(
             f"I understand this as a leaderboard for {count_metric_phrase(query.metric_key)} against {query.cohort_label}. "
-            "The project can answer that once the compact opponent-pitcher cohort warehouse has been built. "
+            "The project can answer that once the compact opponent-pitcher matchup warehouse has been built. "
             "Run `python -m mlb_history_bot sync-retrosheet-pitcher-cohorts` to build it."
         ),
         payload={
@@ -813,9 +973,13 @@ def build_opponent_pitcher_cohort_gap_snippet(query: OpponentPitcherCohortQuery)
 
 
 def build_opponent_pitcher_cohort_snippet(connection, query: OpponentPitcherCohortQuery) -> EvidenceSnippet:
-    if not table_exists(connection, "retrosheet_player_opponent_pitcher_cohorts"):
-        return build_opponent_pitcher_cohort_gap_snippet(query)
-    rows = fetch_opponent_pitcher_cohort_rows(connection, query)
+    rows: list[dict[str, Any]] = []
+    if table_exists(connection, "retrosheet_player_opponent_pitchers"):
+        pitcher_retroids = resolve_opponent_pitcher_retroids(connection, query)
+        if pitcher_retroids:
+            rows = fetch_opponent_pitcher_rows(connection, query, pitcher_retroids)
+    if not rows and query.cohort_kind == "award" and table_exists(connection, "retrosheet_player_opponent_pitcher_cohorts"):
+        rows = fetch_opponent_pitcher_cohort_rows(connection, query)
     if not rows:
         return build_opponent_pitcher_cohort_gap_snippet(query)
     lead = rows[0]
@@ -1145,11 +1309,10 @@ def sync_retrosheet_player_opponent_pitcher_cohorts(
     connection = get_connection(settings.database_path)
     initialize_database(connection)
     clear_retrosheet_player_opponent_pitcher_cohorts(connection)
+    clear_retrosheet_player_opponent_pitchers(connection)
     cohort_sets = load_pitcher_award_cohort_memberships(connection)
-    if not cohort_sets:
-        connection.close()
-        return ["No pitcher-side award cohorts could be resolved from the current historical identities."]
     totals: dict[tuple[str, str, str], dict[str, int | str | set[str]]] = {}
+    pitcher_totals: dict[tuple[str, str], dict[str, int | str]] = {}
     total_chunks = 0
     total_regular_plays = 0
     source_description = ""
@@ -1164,28 +1327,113 @@ def sync_retrosheet_player_opponent_pitcher_cohorts(
                 low_memory=False,
             )
             for chunk in reader:
-                aggregate_pitcher_cohort_chunk(chunk, cohort_sets, totals)
+                aggregate_opponent_pitcher_chunk(chunk, pitcher_totals)
+                if cohort_sets:
+                    aggregate_pitcher_cohort_chunk(chunk, cohort_sets, totals)
                 total_chunks += 1
                 frame = chunk.copy()
                 frame["gametype"] = frame["gametype"].fillna("").str.lower()
                 total_regular_plays += int((frame["gametype"] == "regular").sum())
+        pitcher_written = upsert_retrosheet_player_opponent_pitchers(connection, pitcher_totals.values())
         for entry in totals.values():
             if isinstance(entry.get("pitchers_faced"), set):
                 entry["pitchers_faced"] = len(entry["pitchers_faced"])
-        written = upsert_retrosheet_player_opponent_pitcher_cohorts(connection, totals.values())
+        cohort_written = upsert_retrosheet_player_opponent_pitcher_cohorts(connection, totals.values())
         set_metadata_value(connection, "retrosheet_player_opponent_pitcher_cohorts_last_sync", pd.Timestamp.utcnow().isoformat())
     finally:
         connection.close()
 
-    if not totals:
-        return [f"No opponent-pitcher cohort rows were built from {source_dir}."]
+    if not pitcher_totals and not totals:
+        return [f"No opponent-pitcher matchup rows were built from {source_dir}."]
     return [
         (
-            "Built Retrosheet opponent-pitcher cohort totals "
+            "Built Retrosheet opponent-pitcher matchup totals "
             f"from {source_description} ({total_chunks} chunk(s), {total_regular_plays:,} regular-season plays scanned, "
-            f"{written:,} cohort rows stored)."
+            f"{pitcher_written:,} pitcher-matchup rows stored, {cohort_written:,} cohort rows stored)."
         )
     ]
+
+
+def aggregate_opponent_pitcher_chunk(
+    chunk: pd.DataFrame,
+    totals: dict[tuple[str, str], dict[str, int | str]],
+) -> None:
+    if chunk.empty:
+        return
+    frame = chunk.copy()
+    frame["gametype"] = frame["gametype"].fillna("").str.lower()
+    frame = frame[frame["gametype"] == "regular"]
+    if frame.empty:
+        return
+    for column in ("batter", "pitcher", "date"):
+        frame[column] = frame[column].fillna("").astype(str).str.strip().str.lower()
+    frame = frame[frame["batter"].ne("") & frame["pitcher"].ne("") & frame["date"].str.match(r"^\d{8}$", na=False)]
+    if frame.empty:
+        return
+    frame["season"] = pd.to_numeric(frame["date"].str[:4], errors="coerce").fillna(0).astype(int)
+    for column in ("pa", "ab", "single", "double", "triple", "hr", "walk", "iw", "hbp", "sf", "k", "rbi"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0).astype(int)
+    frame["hits"] = frame["single"] + frame["double"] + frame["triple"] + frame["hr"]
+    grouped = (
+        frame.groupby(["batter", "pitcher"], sort=False)
+        .agg(
+            plate_appearances=("pa", "sum"),
+            at_bats=("ab", "sum"),
+            hits=("hits", "sum"),
+            doubles=("double", "sum"),
+            triples=("triple", "sum"),
+            home_runs=("hr", "sum"),
+            walks=("walk", "sum"),
+            intentional_walks=("iw", "sum"),
+            hit_by_pitch=("hbp", "sum"),
+            sacrifice_flies=("sf", "sum"),
+            strikeouts=("k", "sum"),
+            runs_batted_in=("rbi", "sum"),
+            first_season=("season", "min"),
+            last_season=("season", "max"),
+        )
+        .reset_index()
+    )
+    for row in grouped.itertuples(index=False):
+        key = (str(row.batter), str(row.pitcher))
+        entry = totals.get(key)
+        if entry is None:
+            totals[key] = {
+                "player_id": str(row.batter),
+                "pitcher_id": str(row.pitcher),
+                "plate_appearances": int(row.plate_appearances),
+                "at_bats": int(row.at_bats),
+                "hits": int(row.hits),
+                "doubles": int(row.doubles),
+                "triples": int(row.triples),
+                "home_runs": int(row.home_runs),
+                "walks": int(row.walks),
+                "intentional_walks": int(row.intentional_walks),
+                "hit_by_pitch": int(row.hit_by_pitch),
+                "sacrifice_flies": int(row.sacrifice_flies),
+                "strikeouts": int(row.strikeouts),
+                "runs_batted_in": int(row.runs_batted_in),
+                "first_season": int(row.first_season),
+                "last_season": int(row.last_season),
+            }
+            continue
+        for field in (
+            "plate_appearances",
+            "at_bats",
+            "hits",
+            "doubles",
+            "triples",
+            "home_runs",
+            "walks",
+            "intentional_walks",
+            "hit_by_pitch",
+            "sacrifice_flies",
+            "strikeouts",
+            "runs_batted_in",
+        ):
+            entry[field] = int(entry[field]) + int(getattr(row, field))
+        entry["first_season"] = min(int(entry["first_season"]), int(row.first_season))
+        entry["last_season"] = max(int(entry["last_season"]), int(row.last_season))
 
 
 def load_pitcher_award_cohort_memberships(connection) -> dict[tuple[str, str, str], set[str]]:
