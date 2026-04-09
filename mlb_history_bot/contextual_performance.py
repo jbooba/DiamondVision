@@ -13,6 +13,7 @@ from .cohort_timeline import resolve_cohort_filter
 from .config import Settings
 from .metrics import MetricCatalog
 from .models import EvidenceSnippet
+from .query_utils import extract_minimum_qualifier
 from .retrosheet_splits import open_retrosheet_plays_stream
 from .storage import (
     clear_retrosheet_player_count_splits,
@@ -276,6 +277,10 @@ CONTEXT_METRIC_SPECS = (
     ),
 )
 CONTEXT_METRIC_BY_KEY = {spec.key: spec for spec in CONTEXT_METRIC_SPECS}
+CONTEXT_MINIMUM_QUALIFIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("plate_appearances", ("plate appearances", "plate appearance", "pa", "pas")),
+    ("at_bats", ("at-bats", "at-bat", "at bats", "at bat", "ab", "abs")),
+)
 
 
 
@@ -344,14 +349,15 @@ def parse_count_split_query(question: str) -> CountSplitQuery | None:
         default_key="ops" if any(token in lowered for token in OFFENSIVE_SUMMARY_HINTS) else "ba",
     )
     descriptor, sort_desc = resolve_metric_sort(lowered, metric_spec)
+    sample_basis, min_sample_size = resolve_context_sample_requirements(question, metric_spec)
     return CountSplitQuery(
         count_key=count_key,
         relation=relation,
         metric_key=metric_spec.key,
         descriptor=descriptor,
         sort_desc=sort_desc,
-        min_sample_size=metric_spec.min_sample_size,
-        sample_basis=metric_spec.sample_basis,
+        min_sample_size=min_sample_size,
+        sample_basis=sample_basis,
         is_valid_count=balls <= 3 and strikes <= 2,
     )
 
@@ -544,6 +550,14 @@ def detect_context_metric_spec(lowered_question: str, *, default_key: str) -> Co
     return CONTEXT_METRIC_BY_KEY[default_key]
 
 
+def resolve_context_sample_requirements(question: str, metric_spec: ContextMetricSpec) -> tuple[str | None, int]:
+    for basis, nouns in CONTEXT_MINIMUM_QUALIFIERS:
+        value = extract_minimum_qualifier(question, nouns)
+        if value is not None:
+            return basis, value
+    return metric_spec.sample_basis, metric_spec.min_sample_size
+
+
 def resolve_metric_sort(lowered_question: str, metric_spec: ContextMetricSpec) -> tuple[str, bool]:
     if any(token in lowered_question for token in MAGNITUDE_HIGH_HINTS):
         return ("highest" if metric_spec.kind == "rate" else "most"), True
@@ -673,6 +687,7 @@ def parse_opponent_pitcher_cohort_query(question: str) -> OpponentPitcherCohortQ
         default_key="ops" if any(token in lowered for token in OFFENSIVE_SUMMARY_HINTS) else "ops",
     )
     descriptor, sort_desc = resolve_metric_sort(lowered, metric_spec)
+    sample_basis, min_sample_size = resolve_context_sample_requirements(question, metric_spec)
     return OpponentPitcherCohortQuery(
         cohort_kind=cohort_kind,
         cohort_value=cohort_value,
@@ -680,8 +695,8 @@ def parse_opponent_pitcher_cohort_query(question: str) -> OpponentPitcherCohortQ
         metric_key=metric_spec.key,
         descriptor=descriptor,
         sort_desc=sort_desc,
-        min_sample_size=metric_spec.min_sample_size,
-        sample_basis=metric_spec.sample_basis,
+        min_sample_size=min_sample_size,
+        sample_basis=sample_basis,
         cohort_filter=cohort_filter,
     )
 
@@ -1043,13 +1058,14 @@ def parse_team_relationship_query(question: str) -> TeamRelationshipQuery | None
         default_key="ops" if any(token in lowered for token in OFFENSIVE_SUMMARY_HINTS) else "ops",
     )
     descriptor, sort_desc = resolve_metric_sort(lowered, metric_spec)
+    sample_basis, min_sample_size = resolve_context_sample_requirements(question, metric_spec)
     return TeamRelationshipQuery(
         relationship=relationship,
         metric_key=metric_spec.key,
         descriptor=descriptor,
         sort_desc=sort_desc,
-        min_sample_size=metric_spec.min_sample_size,
-        sample_basis=metric_spec.sample_basis,
+        min_sample_size=min_sample_size,
+        sample_basis=sample_basis,
         aggregate_scope="player" if any(token in lowered for token in AGGREGATE_RELATIONSHIP_HINTS) else "opponent",
     )
 

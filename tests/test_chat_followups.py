@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 from pathlib import Path
 
-from mlb_history_bot.chat import extract_follow_up_seed, rewrite_contextual_follow_up_question, rewrite_follow_up_question, sanitize_answer_text
+from mlb_history_bot.chat import (
+    extract_follow_up_seed,
+    rewrite_contextual_follow_up_question,
+    rewrite_follow_up_question,
+    rewrite_minimum_follow_up_question,
+    sanitize_answer_text,
+)
 from mlb_history_bot.metrics import MetricCatalog
 
 
@@ -48,6 +54,14 @@ def test_rewrite_contextual_followup_uses_previous_player_and_span() -> None:
         },
     )
     assert rewritten == "how many home runs did Kyle Schwarber have between 2017 and 2026?"
+
+
+def test_rewrite_minimum_follow_up_question_reuses_previous_relational_query() -> None:
+    rewritten = rewrite_minimum_follow_up_question(
+        "increase the minimum PA to 100",
+        "Which hitter has the highest OPS against pitchers who have won the Cy Young Award?",
+    )
+    assert rewritten == "Which hitter has the highest OPS against pitchers who have won the Cy Young Award with at least 100 PA?"
 
 
 def test_extract_follow_up_seed_prefers_player_named_in_answer() -> None:

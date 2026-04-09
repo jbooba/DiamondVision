@@ -300,6 +300,15 @@ def test_parse_opponent_pitcher_cohort_query_for_left_handed_pitchers() -> None:
     assert query.cohort_filter.kind == "throw_handedness"
 
 
+def test_parse_opponent_pitcher_cohort_query_respects_explicit_pa_minimum() -> None:
+    query = parse_opponent_pitcher_cohort_query(
+        "Which hitter has the highest OPS against pitchers who have won the Cy Young Award with at least 100 PA?"
+    )
+    assert query is not None
+    assert query.sample_basis == "plate_appearances"
+    assert query.min_sample_size == 100
+
+
 def test_opponent_pitcher_cohort_snippet() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row

@@ -8,6 +8,7 @@ from collections import defaultdict
 
 from .config import Settings
 from .models import ChatResult
+from .query_utils import parse_number_token
 from .search import BaseballResearchEngine
 
 
@@ -81,6 +82,10 @@ FOLLOW_UP_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(r"^\s*(?:instead|rather)\s+(?:use\s+)?(?P<target>.+?)\s*[.?!]*\s*$", re.IGNORECASE),
+)
+FOLLOW_UP_MINIMUM_BASIS_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("PA", ("plate appearances", "plate appearance", "pa", "pas")),
+    ("AB", ("at-bats", "at-bat", "at bats", "at bat", "ab", "abs")),
 )
 
 
@@ -177,6 +182,9 @@ class BaseballChatbot:
                 return contextual_rewrite
         if not previous_question:
             return question
+        qualifier_rewrite = rewrite_minimum_follow_up_question(question, previous_question)
+        if qualifier_rewrite:
+            return qualifier_rewrite
         rewritten = rewrite_follow_up_question(question, previous_question, self.engine.catalog)
         return rewritten or question
 
@@ -402,6 +410,76 @@ def rewrite_contextual_follow_up_question(question: str, seed: dict[str, object]
     if not target_phrase:
         return None
     return f"how many {target_phrase} did {player_name} have between {start_season} and {end_season}?"
+
+
+def rewrite_minimum_follow_up_question(question: str, previous_question: str) -> str | None:
+    minimum_override = extract_follow_up_minimum_override(question)
+    if minimum_override is None:
+        return None
+    basis_label, value = minimum_override
+    base_question = strip_existing_minimum_qualifier(previous_question, basis_label)
+    stripped = base_question.rstrip(" ?!.,")
+    return f"{stripped} with at least {value} {basis_label}?"
+
+
+def extract_follow_up_minimum_override(question: str) -> tuple[str, int] | None:
+    lowered = question.lower().strip()
+    if "minimum" not in lowered and "at least" not in lowered:
+        return None
+    for basis_label, aliases in FOLLOW_UP_MINIMUM_BASIS_ALIASES:
+        alias_pattern = "|".join(re.escape(alias) for alias in aliases)
+        patterns = (
+            re.compile(
+                rf"\b(?:increase|raise|bump|make|set)\s+(?:the\s+)?minimum\s+(?:for\s+)?(?:{alias_pattern})\s+(?:to\s+)?([a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}})\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                rf"\b(?:increase|raise|bump|make|set)\s+(?:the\s+)?minimum\s+(?:to\s+)?([a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}})\s+(?:{alias_pattern})\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                rf"\bwith\s+at\s+least\s+([a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}})\s+(?:{alias_pattern})\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                rf"\bat\s+least\s+([a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}})\s+(?:{alias_pattern})\b",
+                re.IGNORECASE,
+            ),
+        )
+        for pattern in patterns:
+            match = pattern.search(question)
+            if match is None:
+                continue
+            value = parse_number_token(match.group(1))
+            if value is not None:
+                return basis_label, value
+    return None
+
+
+def strip_existing_minimum_qualifier(question: str, basis_label: str) -> str:
+    alias_map = {label: aliases for label, aliases in FOLLOW_UP_MINIMUM_BASIS_ALIASES}
+    aliases = alias_map.get(basis_label, ())
+    alias_pattern = "|".join(re.escape(alias) for alias in aliases)
+    if not alias_pattern:
+        return question
+    patterns = (
+        re.compile(
+            rf"\s+with\s+(?:a\s+)?(?:minimum|min)\s+(?:of\s+)?[a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}}\s+(?:{alias_pattern})\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"\s+with\s+at\s+least\s+[a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}}\s+(?:{alias_pattern})\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"\s+at\s+least\s+[a-z0-9-]+(?:\s+[a-z0-9-]+){{0,3}}\s+(?:{alias_pattern})\b",
+            re.IGNORECASE,
+        ),
+    )
+    cleaned = question
+    for pattern in patterns:
+        cleaned = pattern.sub("", cleaned)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
 
 
 def extract_contextual_metric_target(question: str) -> str | None:
