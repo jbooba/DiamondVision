@@ -185,6 +185,37 @@ def build_test_connection() -> sqlite3.Connection:
             (2021, "2021-07-01", 11, 665742, "Juan Soto", "WSN", "Washington Nationals", "ATL", "Atlanta Braves", 42, 35, 11, 7, 2, 0, 2, 7, 6, 8, 23, 8.4, 13.4, 35.0, 15.2, 8, 2, 2208.0, 23, 110.7, 72.0, 73.5),
         ],
     )
+    con.execute(
+        """
+        CREATE TABLE statcast_history_batter_seasons (
+            last_name_first_name TEXT,
+            player_id TEXT,
+            year TEXT,
+            pa TEXT,
+            ab TEXT,
+            hit TEXT,
+            home_run TEXT,
+            walk TEXT,
+            strikeout TEXT,
+            batting_avg TEXT,
+            on_base_plus_slg TEXT,
+            exit_velocity_avg TEXT,
+            batted_ball TEXT
+        )
+        """
+    )
+    con.executemany(
+        """
+        INSERT INTO statcast_history_batter_seasons(
+            last_name_first_name, player_id, year, pa, ab, hit, home_run, walk, strikeout,
+            batting_avg, on_base_plus_slg, exit_velocity_avg, batted_ball
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("Ramirez, Jose", "608070", "2021", "636", "552", "147", "36", "72", "83", ".266", ".893", "91.9", "366"),
+            ("Soto, Juan", "665742", "2021", "654", "502", "157", "29", "145", "93", ".313", ".999", "91.3", "348"),
+        ],
+    )
     con.commit()
     return con
 
@@ -489,12 +520,25 @@ def test_switch_hitter_statcast_cohort_uses_statcast_stand_filter_when_names_do_
 def test_switch_hitter_statcast_cohort_reports_local_gap_when_no_statcast_rows() -> None:
     con = build_test_connection()
     con.execute("DELETE FROM statcast_batter_games")
+    con.execute("DROP TABLE statcast_history_batter_seasons")
     con.commit()
     researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
     snippet = researcher.build_snippet(con, "highest average exit velocity by a switch hitter in 2021")
     assert snippet is not None
     assert snippet.payload["analysis_type"] == "cohort_metric_gap"
     assert snippet.source == "Cohort Metric Leaderboards"
+    con.close()
+
+
+def test_switch_hitter_statcast_cohort_falls_back_to_imported_history() -> None:
+    con = build_test_connection()
+    con.execute("DELETE FROM statcast_batter_games")
+    con.execute("DROP TABLE statcast_events")
+    con.commit()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "Which switch hitter had the highest average EV in 2021?")
+    assert snippet is not None
+    assert snippet.payload["rows"][0]["player_name"] == "Jose Ramirez"
     con.close()
 
 

@@ -10,6 +10,9 @@ from typing import Any
 
 from .metrics import MetricCatalog, MetricDefinition
 
+STATCAST_HISTORY_BATTER_TABLE = "statcast_history_batter_seasons"
+STATCAST_HISTORY_PITCHER_TABLE = "statcast_history_pitcher_seasons"
+
 
 def get_connection(database_path: Path) -> sqlite3.Connection:
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -755,6 +758,41 @@ def import_csv_file(
     return row_count
 
 
+def import_statcast_history_exports(
+    connection: sqlite3.Connection,
+    *,
+    batter_csv: Path | None = None,
+    pitcher_csv: Path | None = None,
+) -> list[str]:
+    initialize_database(connection)
+    messages: list[str] = []
+    if batter_csv is not None:
+        row_count = import_csv_file(
+            connection,
+            batter_csv,
+            table_name=STATCAST_HISTORY_BATTER_TABLE,
+            source_name="Statcast Custom Leaderboards",
+            dataset_name="batter_stats_history",
+            notes="Imported from a custom Statcast batter history leaderboard export.",
+        )
+        messages.append(
+            f"Imported {row_count} rows from {batter_csv.name} into {STATCAST_HISTORY_BATTER_TABLE}."
+        )
+    if pitcher_csv is not None:
+        row_count = import_csv_file(
+            connection,
+            pitcher_csv,
+            table_name=STATCAST_HISTORY_PITCHER_TABLE,
+            source_name="Statcast Custom Leaderboards",
+            dataset_name="pitcher_stats_history",
+            notes="Imported from a custom Statcast pitcher history leaderboard export.",
+        )
+        messages.append(
+            f"Imported {row_count} rows from {pitcher_csv.name} into {STATCAST_HISTORY_PITCHER_TABLE}."
+        )
+    return messages
+
+
 def _sanitize_headers(headers: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     sanitized: list[str] = []
@@ -772,11 +810,14 @@ def _create_common_indexes(connection: sqlite3.Connection, table_name: str) -> N
     columns = list_table_columns(connection, table_name)
     lower_columns = {column.lower(): column for column in columns}
     candidate_sets = [
+        ("player_id",),
         ("playerid",),
+        ("year",),
         ("yearid",),
         ("teamid",),
         ("game_id", "gameid"),
         ("date", "gamedate"),
+        ("last_name_first_name",),
         ("namefirst", "namelast"),
     ]
     for index_number, candidates in enumerate(candidate_sets, start=1):

@@ -17,6 +17,7 @@ from .ingest import ingest_project_data
 from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
 from .statcast_sync import sync_statcast_data
+from .storage import get_connection, import_statcast_history_exports
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
     statcast_parser.add_argument("--chunk-days", type=int, default=7)
     statcast_parser.add_argument("--daily", action="store_true")
     statcast_parser.add_argument("--backfill-days", type=int, default=3)
+
+    statcast_history_parser = subparsers.add_parser(
+        "import-statcast-history",
+        help="Import season-level Statcast custom leaderboard history CSV exports",
+    )
+    statcast_history_parser.add_argument("--batter-csv", type=Path)
+    statcast_history_parser.add_argument("--pitcher-csv", type=Path)
 
     retrosheet_split_parser = subparsers.add_parser(
         "sync-retrosheet-splits",
@@ -247,6 +255,22 @@ def main() -> int:
             daily=args.daily,
             backfill_days=args.backfill_days,
         )
+        for message in messages:
+            print(message)
+        return 0
+
+    if args.command == "import-statcast-history":
+        if not args.batter_csv and not args.pitcher_csv:
+            raise SystemExit("Provide --batter-csv and/or --pitcher-csv")
+        connection = get_connection(settings.database_path)
+        try:
+            messages = import_statcast_history_exports(
+                connection,
+                batter_csv=args.batter_csv,
+                pitcher_csv=args.pitcher_csv,
+            )
+        finally:
+            connection.close()
         for message in messages:
             print(message)
         return 0

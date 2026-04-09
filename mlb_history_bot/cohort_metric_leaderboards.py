@@ -14,11 +14,13 @@ from .relationship_ontology import ROLE_HINTS
 from .season_metric_leaderboards import (
     SEASON_METRICS,
     SeasonMetricSpec,
+    build_statcast_history_fallback_metric,
+    find_statcast_history_metric,
     find_season_metric,
     passes_sample_threshold,
     statcast_batter_metric_values,
 )
-from .storage import list_table_columns, table_exists
+from .storage import STATCAST_HISTORY_BATTER_TABLE, list_table_columns, table_exists
 from .team_evaluator import safe_float, safe_int
 from .team_season_leaders import (
     build_person_name,
@@ -55,7 +57,7 @@ class CohortMetricLeaderboardResearcher:
         query = parse_cohort_metric_query(connection, question, self.settings)
         if query is None:
             return None
-        if query.metric.source_family == "statcast":
+        if query.metric.source_family in {"statcast", "statcast_history"}:
             rows = fetch_statcast_rows(connection, query)
         elif query.role in {"pitcher", "starter", "reliever"}:
             rows = fetch_pitching_rows(connection, query)
@@ -64,7 +66,7 @@ class CohortMetricLeaderboardResearcher:
         else:
             rows = fetch_hitting_rows(connection, query)
         if not rows:
-            if query.metric.source_family == "statcast":
+            if query.metric.source_family in {"statcast", "statcast_history"}:
                 return build_statcast_cohort_gap_snippet(connection, query)
             return None
         leader = rows[0]
@@ -100,9 +102,11 @@ def parse_cohort_metric_query(connection, question: str, settings: Settings) -> 
         return None
     metric_question = re.sub(r"[?.!,:'\"]", " ", lowered)
     metric = find_season_metric(metric_question)
+    if metric is None:
+        metric = find_statcast_history_metric(connection, metric_question)
     if cohort.kind == "award_winner" and metric is None:
         return None
-    if metric is None or metric.entity_scope != "player" or metric.source_family not in {"historical", "statcast"}:
+    if metric is None or metric.entity_scope != "player" or metric.source_family not in {"historical", "statcast", "statcast_history"}:
         metric = default_metric_for_cohort(question)
     if metric is None:
         return None
@@ -327,7 +331,12 @@ def fetch_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, A
 def fetch_statcast_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
     if query.role not in {"hitter", "player"}:
         return []
-    return fetch_statcast_hitting_rows(connection, query)
+    if query.metric.source_family == "statcast_history":
+        return fetch_statcast_history_rows(connection, query)
+    rows = fetch_statcast_hitting_rows(connection, query)
+    if rows:
+        return rows
+    return fetch_statcast_history_rows(connection, query)
 
 
 def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
@@ -342,6 +351,90 @@ def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[di
         if candidates:
             return rank_rows(candidates, query)
     return []
+
+
+def fetch_statcast_history_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
+    if query.cohort.kind == "manager_era":
+        return []
+    metric = query.metric
+    if metric.source_family != "statcast_history":
+        metric = build_statcast_history_fallback_metric(metric, role="hitter") or metric
+    table_name = metric.dynamic_table_name or STATCAST_HISTORY_BATTER_TABLE
+    value_column = metric.dynamic_value_column or ""
+    if (
+        not value_column
+        or table_name != STATCAST_HISTORY_BATTER_TABLE
+        or not table_exists(connection, table_name)
+    ):
+        return []
+    parameters: list[Any] = []
+    season_sql = ""
+    if query.start_season is not None:
+        season_sql += " AND CAST(NULLIF(year, '') AS INTEGER) >= ?"
+        parameters.append(query.start_season)
+    if query.end_season is not None:
+        season_sql += " AND CAST(NULLIF(year, '') AS INTEGER) <= ?"
+        parameters.append(query.end_season)
+    rows = connection.execute(
+        f"""
+        SELECT *
+        FROM "{table_name}"
+        WHERE 1=1 {season_sql}
+        """,
+        tuple(parameters),
+    ).fetchall()
+    if not rows:
+        return []
+    cohort_names = {
+        str(name).strip().lower()
+        for name in (query.cohort.player_names or set())
+        if str(name).strip()
+    }
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        player_name = normalize_statcast_history_name(row["last_name_first_name"])
+        if cohort_names and player_name.lower() not in cohort_names:
+            continue
+        metric_value = safe_float(row[value_column])
+        if metric_value is None:
+            continue
+        sample_values = statcast_history_sample_values(row)
+        if not passes_sample_threshold(metric, sample_values):
+            continue
+        candidates.append(
+            {
+                "player_name": player_name,
+                "metric_value": float(metric_value),
+                "sample_size": float(sample_values.get(metric.sample_basis or "pa") or 0.0),
+                "plate_appearances": safe_int(row["pa"]) or 0 if "pa" in row.keys() else 0,
+                "at_bats": safe_int(row["ab"]) or 0 if "ab" in row.keys() else 0,
+                "hits": safe_int(row["hit"]) or 0 if "hit" in row.keys() else 0,
+                "home_runs": safe_int(row["home_run"]) or 0 if "home_run" in row.keys() else 0,
+                "walks": safe_int(row["walk"]) or 0 if "walk" in row.keys() else 0,
+                "strikeouts": safe_int(row["strikeout"]) or 0 if "strikeout" in row.keys() else 0,
+                "avg": safe_float(row["batting_avg"]) if "batting_avg" in row.keys() else None,
+                "ops": safe_float(row["on_base_plus_slg"]) if "on_base_plus_slg" in row.keys() else None,
+                "first_season": safe_int(row["year"]) or 0,
+                "last_season": safe_int(row["year"]) or 0,
+            }
+        )
+    return rank_rows(candidates, query)
+
+
+def normalize_statcast_history_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if "," not in text:
+        return text
+    last_name, first_name = [part.strip() for part in text.split(",", 1)]
+    return f"{first_name} {last_name}".strip()
+
+
+def statcast_history_sample_values(row: Any) -> dict[str, float | None]:
+    values: dict[str, float | None] = {}
+    for key in ("pa", "ab", "hit", "home_run", "walk", "strikeout", "player_age", "batted_ball"):
+        if key in row.keys():
+            values[key] = safe_float(row[key])
+    return values
 
 
 def build_statcast_candidates(rows, query: CohortMetricQuery) -> list[dict[str, Any]]:
@@ -760,6 +853,8 @@ def build_sample_text(query: CohortMetricQuery, row: dict[str, Any]) -> str:
 
 
 def build_citation(query: CohortMetricQuery) -> str:
+    if query.metric.source_family == "statcast_history":
+        return "Imported Statcast custom leaderboard history CSV exports"
     if query.metric.source_family == "statcast":
         return "Local Statcast batter summaries aggregated from synced public Statcast data"
     if query.cohort.kind == "manager_era":

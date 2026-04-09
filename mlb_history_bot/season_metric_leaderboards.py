@@ -18,7 +18,12 @@ from .provider_metrics import (
 from .pybaseball_adapter import load_team_ids
 from .query_intent import detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
 from .query_utils import extract_minimum_qualifier, extract_referenced_season, extract_season_span
-from .storage import list_table_columns, table_exists
+from .storage import (
+    STATCAST_HISTORY_BATTER_TABLE,
+    STATCAST_HISTORY_PITCHER_TABLE,
+    list_table_columns,
+    table_exists,
+)
 from .team_evaluator import safe_float, safe_int
 from .team_season_compare import resolve_team_season_reference
 from .team_season_leaders import (
@@ -208,6 +213,89 @@ EXPLICIT_HITTER_ENTITY_HINTS = (
     " non pitchers ",
     " non-pitchers ",
 )
+STATCAST_HISTORY_NON_METRIC_COLUMNS = {
+    "last_name_first_name",
+    "player_id",
+    "year",
+    "pitch_hand",
+    "p_formatted_ip",
+}
+STATCAST_HISTORY_TABLE_CONFIG = (
+    {
+        "table_name": STATCAST_HISTORY_BATTER_TABLE,
+        "role": "hitter",
+        "name_column": "last_name_first_name",
+        "player_id_column": "player_id",
+        "season_column": "year",
+    },
+    {
+        "table_name": STATCAST_HISTORY_PITCHER_TABLE,
+        "role": "pitcher",
+        "name_column": "last_name_first_name",
+        "player_id_column": "player_id",
+        "season_column": "year",
+    },
+)
+STATCAST_HISTORY_RATE_ALIASES: dict[str, tuple[str, ...]] = {
+    "batting_avg": ("avg", "ba", "batting average"),
+    "slg_percent": ("slg", "slugging percentage", "slugging"),
+    "on_base_percent": ("obp", "on base percentage", "on-base percentage"),
+    "on_base_plus_slg": ("ops", "on base plus slugging", "on-base plus slugging"),
+    "isolated_power": ("iso", "isolated power"),
+    "k_percent": ("k percent", "k%", "strikeout rate", "strikeout percentage"),
+    "bb_percent": ("bb percent", "bb%", "walk rate", "walk percentage"),
+    "xba": ("xba", "expected batting average"),
+    "xslg": ("xslg", "expected slugging"),
+    "woba": ("woba",),
+    "xwoba": ("xwoba", "expected woba"),
+    "xobp": ("xobp", "expected obp"),
+    "xiso": ("xiso", "expected iso"),
+    "wobacon": ("wobacon", "woba on contact"),
+    "xwobacon": ("xwobacon", "expected woba on contact"),
+    "bacon": ("bacon", "batting average on contact"),
+    "xbacon": ("xbacon", "expected batting average on contact"),
+    "exit_velocity_avg": ("average exit velocity", "avg exit velocity", "avg ev", "exit velocity", "ev"),
+    "launch_angle_avg": ("average launch angle", "avg launch angle", "launch angle"),
+    "hard_hit_percent": ("hard-hit rate", "hard hit rate", "hard-hit percentage"),
+    "barrel_batted_rate": ("barrel rate", "barrel percentage"),
+    "sweet_spot_percent": ("sweet spot rate", "sweet spot percentage"),
+    "avg_swing_speed": ("average swing speed", "avg swing speed", "swing speed"),
+    "avg_swing_length": ("average swing length", "avg swing length", "swing length"),
+    "fast_swing_rate": ("fast swing rate",),
+    "swords": ("swords",),
+    "attack_angle": ("attack angle",),
+    "attack_direction": ("attack direction",),
+    "ideal_angle_rate": ("ideal angle rate",),
+    "vertical_swing_path": ("vertical swing path",),
+    "p_era": ("era", "earned run average"),
+    "p_opp_batting_avg": ("opponent batting average", "opp batting average"),
+    "p_opp_on_base_avg": ("opponent on base average", "opp obp"),
+}
+STATCAST_HISTORY_FALLBACK_COLUMNS: dict[tuple[str, str], str] = {
+    ("hitter", "xba"): "xba",
+    ("hitter", "xwoba"): "xwoba",
+    ("hitter", "xslg"): "xslg",
+    ("hitter", "avg_exit_velocity"): "exit_velocity_avg",
+    ("hitter", "hard_hit_rate"): "hard_hit_percent",
+    ("hitter", "barrel_rate"): "barrel_batted_rate",
+}
+STATCAST_HISTORY_PITCH_LABELS = {
+    "ff": "four-seam fastball",
+    "sl": "slider",
+    "ch": "changeup",
+    "cu": "curveball",
+    "si": "sinker",
+    "fc": "cutter",
+    "fs": "splitter",
+    "kn": "knuckleball",
+    "st": "sweeper",
+    "sv": "slurve",
+    "fo": "forkball",
+    "sc": "screwball",
+    "fastball": "fastball",
+    "breaking": "breaking ball",
+    "offspeed": "offspeed pitch",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -226,6 +314,9 @@ class SeasonMetricSpec:
     provider_batting_column: str | None = None
     provider_pitching_column: str | None = None
     provider_qualified_only: bool = False
+    dynamic_table_name: str | None = None
+    dynamic_value_column: str | None = None
+    dynamic_aggregate_mode: str | None = None
 
 
 @dataclass(slots=True)
@@ -379,8 +470,17 @@ class SeasonMetricLeaderboardResearcher:
             return None
         if query.metric.source_family == "provider":
             rows = fetch_provider_season_rows(query)
+        elif query.metric.source_family == "statcast_history":
+            rows = fetch_statcast_history_rows(connection, query)
         elif query.metric.source_family == "statcast":
             rows = fetch_statcast_season_rows(connection, query)
+            if not rows and query.entity_scope == "player":
+                history_fallback = build_statcast_history_fallback_query(query)
+                if history_fallback is not None:
+                    fallback_rows = fetch_statcast_history_rows(connection, history_fallback)
+                    if fallback_rows:
+                        query = history_fallback
+                        rows = fallback_rows
             if not rows and query.entity_scope == "player":
                 provider_fallback = build_statcast_provider_fallback_query(query, self.catalog)
                 if provider_fallback is not None:
@@ -433,6 +533,8 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
     if metric is None:
+        metric = find_statcast_history_metric(connection, metric_search_text)
+    if metric is None:
         provider_metric = find_provider_metric(metric_search_text, catalog)
         if provider_metric is not None:
             metric = build_provider_season_metric_spec(provider_metric, provider_group_preference)
@@ -451,7 +553,8 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
     current_season = settings.live_season or date.today().year
     explicit_span = extract_season_span(question, current_season) is not None
     explicit_season = extract_referenced_season(question, current_season) is not None
-    start_season, end_season, scope_label, aggregate_range = resolve_season_scope(question, current_season, metric.source_family)
+    source_scope_family = "statcast" if metric.source_family == "statcast_history" else metric.source_family
+    start_season, end_season, scope_label, aggregate_range = resolve_season_scope(question, current_season, source_scope_family)
     if start_season is None or end_season is None:
         return None
     if aggregate_range and metric.source_family == "provider":
@@ -644,6 +747,60 @@ def build_statcast_provider_fallback_query(query: SeasonMetricQuery, catalog: Me
     )
 
 
+def build_statcast_history_fallback_metric(metric: SeasonMetricSpec, *, role: str) -> SeasonMetricSpec | None:
+    column = STATCAST_HISTORY_FALLBACK_COLUMNS.get((role, metric.key))
+    if not column:
+        return None
+    table_name = STATCAST_HISTORY_BATTER_TABLE if role == "hitter" else STATCAST_HISTORY_PITCHER_TABLE
+    spec = build_statcast_history_metric_spec(
+        column=column,
+        table_name=table_name,
+        role=role,
+    )
+    return SeasonMetricSpec(
+        key=spec.key,
+        label=metric.label,
+        aliases=metric.aliases,
+        source_family=spec.source_family,
+        role=spec.role,
+        entity_scope=spec.entity_scope,
+        higher_is_better=metric.higher_is_better,
+        formatter=metric.formatter,
+        sample_basis=spec.sample_basis,
+        min_sample_size=metric.min_sample_size,
+        provider_metric_name=spec.provider_metric_name,
+        provider_batting_column=spec.provider_batting_column,
+        provider_pitching_column=spec.provider_pitching_column,
+        provider_qualified_only=spec.provider_qualified_only,
+        dynamic_table_name=spec.dynamic_table_name,
+        dynamic_value_column=spec.dynamic_value_column,
+        dynamic_aggregate_mode=spec.dynamic_aggregate_mode,
+    )
+
+
+def build_statcast_history_fallback_query(query: SeasonMetricQuery) -> SeasonMetricQuery | None:
+    fallback_metric = build_statcast_history_fallback_metric(query.metric, role=query.role)
+    if fallback_metric is None:
+        return None
+    return SeasonMetricQuery(
+        metric=fallback_metric,
+        descriptor=query.descriptor,
+        sort_desc=query.sort_desc,
+        entity_scope=query.entity_scope,
+        role=query.role,
+        start_season=query.start_season,
+        end_season=query.end_season,
+        scope_label=query.scope_label,
+        team_filter_code=query.team_filter_code,
+        team_filter_name=query.team_filter_name,
+        provider_group_preference=query.provider_group_preference,
+        minimum_starts=query.minimum_starts,
+        aggregate_range=query.aggregate_range,
+        team_record_filter=query.team_record_filter,
+        exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
+    )
+
+
 def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) -> SeasonMetricQuery | None:
     if query.start_season is None or query.end_season is None:
         return None
@@ -678,6 +835,261 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
         team_record_filter=query.team_record_filter,
         exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
     )
+
+
+def find_statcast_history_metric(connection, lowered_question: str) -> SeasonMetricSpec | None:
+    best_match: tuple[int, SeasonMetricSpec] | None = None
+    for config in STATCAST_HISTORY_TABLE_CONFIG:
+        table_name = str(config["table_name"])
+        if not table_exists(connection, table_name):
+            continue
+        role = str(config["role"])
+        for column in list_table_columns(connection, table_name):
+            spec = build_statcast_history_metric_spec(column=column, table_name=table_name, role=role)
+            if spec is None:
+                continue
+            for alias in spec.aliases:
+                alias_lower = alias.lower().strip()
+                if not alias_lower:
+                    continue
+                pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+                if re.search(pattern, lowered_question) is None:
+                    continue
+                score = len(alias_lower) + metric_match_bonus(spec, lowered_question)
+                if best_match is None or score > best_match[0]:
+                    best_match = (score, spec)
+    return best_match[1] if best_match else None
+
+
+def build_statcast_history_metric_spec(*, column: str, table_name: str, role: str) -> SeasonMetricSpec | None:
+    normalized = column.lower().strip()
+    if normalized in STATCAST_HISTORY_NON_METRIC_COLUMNS:
+        return None
+    if normalized == "n":
+        return None
+    aliases = tuple(sorted(build_statcast_history_aliases(normalized, role)))
+    if not aliases:
+        return None
+    aggregate_mode = infer_statcast_history_aggregate_mode(normalized, role)
+    sample_basis = infer_statcast_history_sample_basis(normalized, role)
+    min_sample_size = infer_statcast_history_min_sample_size(sample_basis, aggregate_mode)
+    return SeasonMetricSpec(
+        key=normalize_metric_key(normalized),
+        label=format_statcast_history_label(normalized),
+        aliases=aliases,
+        source_family="statcast_history",
+        role=role,
+        entity_scope="player",
+        higher_is_better=infer_statcast_history_higher_is_better(normalized, role),
+        formatter=infer_statcast_history_formatter(normalized, aggregate_mode),
+        sample_basis=sample_basis,
+        min_sample_size=min_sample_size,
+        dynamic_table_name=table_name,
+        dynamic_value_column=normalized,
+        dynamic_aggregate_mode=aggregate_mode,
+    )
+
+
+def build_statcast_history_aliases(column: str, role: str) -> set[str]:
+    aliases = {
+        column,
+        column.replace("_", " "),
+    }
+    stripped = column
+    for prefix in ("b_", "p_", "r_"):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :]
+            aliases.add(stripped)
+            aliases.add(stripped.replace("_", " "))
+            break
+    if stripped in STATCAST_HISTORY_RATE_ALIASES:
+        aliases.update(STATCAST_HISTORY_RATE_ALIASES[stripped])
+    if column in STATCAST_HISTORY_RATE_ALIASES:
+        aliases.update(STATCAST_HISTORY_RATE_ALIASES[column])
+    pitch_metric = parse_statcast_history_pitch_metric(stripped)
+    if pitch_metric is not None:
+        aliases.update(pitch_metric)
+    if stripped.endswith("_percent"):
+        base = stripped[: -len("_percent")].replace("_", " ")
+        aliases.update({f"{base} percent", f"{base} percentage", f"{base} rate"})
+    if stripped.endswith("_avg_speed"):
+        base = stripped[: -len("_avg_speed")].replace("_", " ")
+        aliases.update({f"{base} average speed", f"{base} avg speed", f"{base} velocity", f"{base} average velocity"})
+    if stripped.endswith("_avg_spin"):
+        base = stripped[: -len("_avg_spin")].replace("_", " ")
+        aliases.update({f"{base} average spin", f"{base} avg spin", f"{base} spin", f"{base} spin rate"})
+    if stripped.endswith("_range_speed"):
+        base = stripped[: -len("_range_speed")].replace("_", " ")
+        aliases.update({f"{base} speed range", f"{base} velocity range"})
+    if role == "pitcher" and "walk" in stripped and "intent" not in stripped:
+        aliases.add(stripped.replace("walk", "walks allowed").replace("_", " "))
+    return {alias.strip().lower() for alias in aliases if alias.strip()}
+
+
+def parse_statcast_history_pitch_metric(column: str) -> set[str] | None:
+    for prefix, label in STATCAST_HISTORY_PITCH_LABELS.items():
+        if column == f"n_{prefix}_formatted":
+            return {f"{label} count", f"{label} pitches", f"number of {label}s"}
+        if not column.startswith(f"{prefix}_"):
+            continue
+        suffix = column[len(prefix) + 1 :]
+        if suffix == "avg_speed":
+            return {f"{label} velocity", f"{label} avg velocity", f"{label} average speed"}
+        if suffix == "avg_spin":
+            return {f"{label} spin", f"{label} spin rate", f"{label} avg spin"}
+        if suffix == "avg_break_x":
+            return {f"{label} horizontal break", f"{label} avg break x"}
+        if suffix == "avg_break_z":
+            return {f"{label} vertical break", f"{label} avg break z"}
+        if suffix == "avg_break_z_induced":
+            return {f"{label} induced vertical break", f"{label} ivb"}
+        if suffix == "avg_break":
+            return {f"{label} break", f"{label} average break"}
+        if suffix == "range_speed":
+            return {f"{label} velocity range", f"{label} speed range"}
+    return None
+
+
+def format_statcast_history_label(column: str) -> str:
+    pitch_metric = parse_statcast_history_pitch_metric(column)
+    if pitch_metric:
+        alias = sorted(pitch_metric, key=len)[0]
+        return alias.replace("avg", "Avg").replace("ivb", "IVB").title()
+    if column in STATCAST_HISTORY_RATE_ALIASES:
+        return STATCAST_HISTORY_RATE_ALIASES[column][0].replace("avg", "Avg").replace("xba", "xBA").replace("xslg", "xSLG").replace("xwoba", "xwOBA").replace("xobp", "xOBP").replace("xiso", "xISO").replace("woba", "wOBA")
+    base = column
+    for prefix in ("b_", "p_", "r_"):
+        if base.startswith(prefix):
+            base = base[len(prefix) :]
+            break
+    return base.replace("_", " ").title()
+
+
+def infer_statcast_history_aggregate_mode(column: str, role: str) -> str:
+    normalized = column.lower()
+    if normalized == "player_age":
+        return "max"
+    if normalized.startswith("n_") and normalized.endswith("_formatted"):
+        return "sum"
+    if any(
+        token in normalized
+        for token in (
+            "_percent",
+            "_avg_",
+            "avg_",
+            "attack_",
+            "woba",
+            "xba",
+            "xslg",
+            "xobp",
+            "xiso",
+            "bacon",
+            "xbacon",
+            "wobacon",
+            "xwobacon",
+            "batting_avg",
+            "slg_percent",
+            "on_base_percent",
+            "on_base_plus_slg",
+            "isolated_power",
+            "babip",
+            "arm_angle",
+            "p_era",
+            "p_opp_",
+        )
+    ):
+        return "weighted_avg"
+    return "sum"
+
+
+def infer_statcast_history_sample_basis(column: str, role: str) -> str | None:
+    normalized = column.lower()
+    if normalized == "player_age":
+        return None
+    if normalized.startswith("n_") and normalized.endswith("_formatted"):
+        return normalized
+    for prefix in tuple(STATCAST_HISTORY_PITCH_LABELS):
+        if normalized.startswith(f"{prefix}_"):
+            return f"n_{prefix}_formatted"
+    if any(token in normalized for token in ("pitch_count", "swing", "contact_percent", "whiff", "in_zone", "out_zone", "edge", "meatball", "f_strike")):
+        return "pitch_count"
+    if any(token in normalized for token in ("barrel", "hard_hit", "sweet_spot", "solidcontact", "flareburner", "poorly", "groundballs", "flyballs", "linedrives", "popups", "pull_percent", "straightaway_percent", "opposite_percent", "exit_velocity_avg", "launch_angle_avg", "bacon", "xbacon", "wobacon", "xwobacon")):
+        return "batted_ball"
+    if any(token in normalized for token in ("batting_avg", "slg_percent", "isolated_power", "xba", "xslg", "xiso")):
+        return "ab"
+    if any(token in normalized for token in ("on_base_percent", "on_base_plus_slg", "woba", "xwoba", "xobp", "k_percent", "bb_percent", "avg_swing_speed", "avg_swing_length", "fast_swing_rate", "blasts_", "squared_up_", "swords", "attack_", "ideal_angle_rate", "vertical_swing_path")):
+        return "pa"
+    if role == "pitcher" and any(token in normalized for token in ("p_era", "p_opp_", "walk", "strikeout", "hit", "home_run", "xba", "xslg", "woba", "xwoba", "avg_swing_speed")):
+        return "pa"
+    return None
+
+
+def infer_statcast_history_min_sample_size(sample_basis: str | None, aggregate_mode: str) -> int:
+    if aggregate_mode == "sum" or sample_basis is None:
+        return 1
+    if sample_basis in {"pa", "ab"}:
+        return 20
+    if sample_basis == "pitch_count":
+        return 50
+    if sample_basis == "batted_ball":
+        return 10
+    if sample_basis.startswith("n_"):
+        return 10
+    return 1
+
+
+def infer_statcast_history_higher_is_better(column: str, role: str) -> bool:
+    normalized = column.lower()
+    negative_tokens = {"loss", "blown_save", "caught_stealing", "gnd_into_dp", "gnd_into_tp", "missed_bunt"}
+    if any(token in normalized for token in negative_tokens):
+        return False
+    if role == "hitter":
+        return not any(token in normalized for token in ("strikeout", "k_percent", "swing_miss", "out_"))
+    return not any(
+        token in normalized
+        for token in (
+            "p_era",
+            "opp_",
+            "earned_run",
+            "unearned_run",
+            "walk",
+            "bb_percent",
+            "batting_avg",
+            "on_base_",
+            "slg_percent",
+            "isolated_power",
+            "babip",
+            "home_run",
+            "hit",
+            "woba",
+            "xba",
+            "xslg",
+            "xobp",
+            "xiso",
+            "bacon",
+            "xwoba",
+            "exit_velocity",
+            "launch_angle",
+            "barrel",
+            "hard_hit",
+            "sweet_spot",
+        )
+    )
+
+
+def infer_statcast_history_formatter(column: str, aggregate_mode: str) -> str:
+    normalized = column.lower()
+    if aggregate_mode == "sum":
+        return ".0f"
+    if "spin" in normalized:
+        return ".0f"
+    if "percent" in normalized or normalized.endswith("_rate"):
+        return ".1f"
+    if any(token in normalized for token in ("speed", "angle", "break", "era")):
+        return ".1f" if normalized != "p_era" else ".2f"
+    if any(token in normalized for token in ("avg", "woba", "xba", "xslg", "xobp", "xiso", "babip", "on_base", "slg", "ops", "iso")):
+        return ".3f"
+    return ".2f"
 
 
 def parse_team_record_filter(lowered_question: str) -> str | None:
@@ -1300,6 +1712,247 @@ def fetch_statcast_season_rows(connection, query: SeasonMetricQuery) -> list[dic
     return fetch_statcast_batter_rows(connection, query)
 
 
+def fetch_statcast_history_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
+    table_name = query.metric.dynamic_table_name or ""
+    value_column = query.metric.dynamic_value_column or ""
+    if (
+        not table_name
+        or not value_column
+        or not table_exists(connection, table_name)
+        or query.entity_scope != "player"
+        or query.team_filter_code
+    ):
+        return []
+    rows = connection.execute(
+        f"""
+        SELECT *
+        FROM "{table_name}"
+        WHERE CAST(NULLIF(year, '') AS INTEGER) BETWEEN ? AND ?
+        """,
+        (query.start_season, query.end_season),
+    ).fetchall()
+    if not rows:
+        return []
+    if query.aggregate_range:
+        return rank_rows(
+            build_aggregated_statcast_history_rows(rows, query),
+            query,
+        )
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        metric_value = safe_float(row[value_column])
+        season = safe_int(row["year"])
+        if metric_value is None or season is None:
+            continue
+        values = statcast_history_sample_values(row)
+        if not passes_statcast_history_qualifiers(values, query):
+            continue
+        if not passes_sample_threshold(query.metric, values):
+            continue
+        candidate = build_statcast_history_row_payload(row, query, metric_value=float(metric_value))
+        candidates.append(candidate)
+    return rank_rows(candidates, query)
+
+
+def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQuery) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    value_column = query.metric.dynamic_value_column or ""
+    aggregate_mode = query.metric.dynamic_aggregate_mode or "sum"
+    weight_column = query.metric.sample_basis
+    for row in rows:
+        metric_value = safe_float(row[value_column])
+        if metric_value is None:
+            continue
+        player_id = str(row["player_id"] or "").strip()
+        if not player_id:
+            continue
+        name = format_statcast_history_player_name(row["last_name_first_name"])
+        group = groups.setdefault(
+            player_id,
+            {
+                "player_id": player_id,
+                "player_name": name,
+                "scope_start_season": query.start_season,
+                "scope_end_season": query.end_season,
+                "scope_label": query.scope_label,
+                "metric_value_sum": 0.0,
+                "metric_weight_sum": 0.0,
+                "metric_observation_count": 0,
+                "sample_values": {},
+                "display_values": {},
+            },
+        )
+        group["metric_observation_count"] += 1
+        if aggregate_mode == "weighted_avg":
+            weight = safe_float(row[weight_column]) if weight_column and weight_column in row.keys() else None
+            if weight is None or weight <= 0:
+                weight = 1.0
+            group["metric_value_sum"] += float(metric_value) * float(weight)
+            group["metric_weight_sum"] += float(weight)
+        elif aggregate_mode == "max":
+            if group["metric_observation_count"] == 1 or float(metric_value) > group["metric_value_sum"]:
+                group["metric_value_sum"] = float(metric_value)
+            group["metric_weight_sum"] = 1.0
+        else:
+            group["metric_value_sum"] += float(metric_value)
+            group["metric_weight_sum"] += 1.0
+        merge_statcast_history_samples(group["sample_values"], row)
+        merge_statcast_history_display_values(group["display_values"], row, query.role)
+    candidates: list[dict[str, Any]] = []
+    for group in groups.values():
+        values = dict(group["sample_values"])
+        if not passes_statcast_history_qualifiers(values, query):
+            continue
+        if not passes_sample_threshold(query.metric, values):
+            continue
+        metric_weight_sum = float(group["metric_weight_sum"] or 0.0)
+        metric_value = (
+            (float(group["metric_value_sum"]) / metric_weight_sum)
+            if aggregate_mode == "weighted_avg"
+            else float(group["metric_value_sum"])
+        )
+        if aggregate_mode == "weighted_avg" and metric_weight_sum <= 0:
+            continue
+        row_payload = {
+            "season": query.end_season,
+            "scope_label": query.scope_label,
+            "scope_start_season": query.start_season,
+            "scope_end_season": query.end_season,
+            "player_name": group["player_name"],
+            "player_id": group["player_id"],
+            "metric_value": metric_value,
+            "sample_size": infer_statcast_history_sample_size(values, query.metric.sample_basis, metric_value),
+            **group["display_values"],
+        }
+        if weight_column:
+            row_payload[weight_column] = values.get(weight_column)
+        candidates.append(row_payload)
+    return candidates
+
+
+def statcast_history_sample_values(row: Any) -> dict[str, float | int | None]:
+    values: dict[str, float | int | None] = {}
+    for key in (
+        "pa",
+        "ab",
+        "batted_ball",
+        "pitch_count",
+        "p_game",
+        "p_starting_p",
+        "hit",
+        "home_run",
+        "walk",
+        "strikeout",
+        "player_age",
+    ):
+        if key in row.keys():
+            values[key] = safe_float(row[key])
+    for key in row.keys():
+        key_text = str(key)
+        if key_text.startswith("n_") and key_text.endswith("_formatted"):
+            values[key_text] = safe_float(row[key_text])
+    return values
+
+
+def merge_statcast_history_samples(target: dict[str, float | int | None], row: Any) -> None:
+    for key, value in statcast_history_sample_values(row).items():
+        numeric = safe_float(value)
+        if numeric is None:
+            continue
+        target[key] = float(target.get(key) or 0.0) + float(numeric)
+
+
+def merge_statcast_history_display_values(target: dict[str, Any], row: Any, role: str) -> None:
+    display_columns = (
+        (
+            "player_age",
+            "pa",
+            "ab",
+            "hit",
+            "home_run",
+            "walk",
+            "strikeout",
+            "batting_avg",
+            "on_base_plus_slg",
+            "exit_velocity_avg",
+            "barrel",
+            "pitch_count",
+            "batted_ball",
+        )
+        if role == "hitter"
+        else (
+            "player_age",
+            "p_game",
+            "p_starting_p",
+            "p_win",
+            "p_loss",
+            "p_save",
+            "p_era",
+            "strikeout",
+            "walk",
+            "pitch_count",
+            "home_run",
+            "hit",
+        )
+    )
+    for column in display_columns:
+        if column not in row.keys():
+            continue
+        value = safe_float(row[column])
+        if value is None:
+            continue
+        aggregate_mode = infer_statcast_history_aggregate_mode(column, role)
+        if aggregate_mode == "sum":
+            target[column] = float(target.get(column) or 0.0) + float(value)
+        else:
+            target[column] = float(value)
+
+
+def build_statcast_history_row_payload(row: Any, query: SeasonMetricQuery, *, metric_value: float) -> dict[str, Any]:
+    values = statcast_history_sample_values(row)
+    payload: dict[str, Any] = {
+        "season": safe_int(row["year"]) or query.end_season,
+        "scope_label": str(safe_int(row["year"]) or query.end_season),
+        "scope_start_season": safe_int(row["year"]) or query.end_season,
+        "scope_end_season": safe_int(row["year"]) or query.end_season,
+        "player_name": format_statcast_history_player_name(row["last_name_first_name"]),
+        "player_id": str(row["player_id"] or ""),
+        "metric_value": metric_value,
+        "sample_size": infer_statcast_history_sample_size(values, query.metric.sample_basis, metric_value),
+    }
+    merge_statcast_history_display_values(payload, row, query.role)
+    return payload
+
+
+def passes_statcast_history_qualifiers(values: dict[str, float | int | None], query: SeasonMetricQuery) -> bool:
+    if query.role == "pitcher" and query.minimum_starts is not None:
+        starts = values.get("p_starting_p")
+        try:
+            if float(starts or 0.0) < float(query.minimum_starts):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def infer_statcast_history_sample_size(
+    values: dict[str, float | int | None],
+    sample_basis: str | None,
+    metric_value: float,
+) -> float:
+    if sample_basis and values.get(sample_basis) is not None:
+        return float(values[sample_basis] or 0.0)
+    return float(metric_value)
+
+
+def format_statcast_history_player_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if "," not in text:
+        return text
+    last_name, first_name = [part.strip() for part in text.split(",", 1)]
+    return f"{first_name} {last_name}".strip()
+
+
 def fetch_provider_season_rows(query: SeasonMetricQuery) -> list[dict[str, Any]]:
     cache: dict[tuple[str, int, bool], list[dict[str, Any]]] = {}
     candidates: list[dict[str, Any]] = []
@@ -1784,6 +2437,8 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
 def build_citation(query: SeasonMetricQuery) -> str:
     if query.metric.source_family == "provider":
         return "FanGraphs season leaderboards via pybaseball"
+    if query.metric.source_family == "statcast_history":
+        return "Imported Statcast custom leaderboard history CSV exports"
     if query.metric.source_family == "statcast":
         return "Local Statcast season summaries aggregated from synced public Statcast data"
     if query.entity_scope == "team":

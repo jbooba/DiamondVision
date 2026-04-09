@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from mlb_history_bot.config import Settings
 from mlb_history_bot.player_game_conditions import PlayerGameConditionResearcher
@@ -150,7 +151,8 @@ def build_connection() -> sqlite3.Connection:
 def test_birthday_condition_ops_leaderboard() -> None:
     connection = build_connection()
     researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(connection, "which hitter has the highest OPS when playing on their birthday")
+    with patch("mlb_history_bot.player_game_conditions.is_supported_birthday_index_query", return_value=False):
+        snippet = researcher.build_snippet(connection, "which hitter has the highest OPS when playing on their birthday")
     connection.close()
     assert snippet is not None
     assert snippet.payload["analysis_type"] == "player_game_condition_leaderboard"
@@ -161,7 +163,8 @@ def test_birthday_condition_ops_leaderboard() -> None:
 def test_birthday_condition_home_run_leaderboard_supports_specific_season() -> None:
     connection = build_connection()
     researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(connection, "who hit the most home runs on their birthday in 2021")
+    with patch("mlb_history_bot.player_game_conditions.is_supported_birthday_index_query", return_value=False):
+        snippet = researcher.build_snippet(connection, "who hit the most home runs on their birthday in 2021")
     connection.close()
     assert snippet is not None
     assert snippet.payload["rows"][0]["player_name"] == "Beta Slugger"
@@ -171,7 +174,8 @@ def test_birthday_condition_home_run_leaderboard_supports_specific_season() -> N
 def test_birthday_condition_payload_marks_full_leaderboard_metadata() -> None:
     connection = build_connection()
     researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(connection, "which hitter has the highest OPS when playing on their birthday")
+    with patch("mlb_history_bot.player_game_conditions.is_supported_birthday_index_query", return_value=False):
+        snippet = researcher.build_snippet(connection, "which hitter has the highest OPS when playing on their birthday")
     connection.close()
     assert snippet is not None
     assert snippet.payload["leaderboard_complete"] is True
@@ -184,10 +188,11 @@ def test_birthday_condition_payload_marks_full_leaderboard_metadata() -> None:
 def test_birthday_condition_respects_explicit_minimum_plate_appearances() -> None:
     connection = build_connection()
     researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(
-        connection,
-        "which hitter has the highest OPS when playing on their birthday with a minimum of 20 PA",
-    )
+    with patch("mlb_history_bot.player_game_conditions.is_supported_birthday_index_query", return_value=False):
+        snippet = researcher.build_snippet(
+            connection,
+            "which hitter has the highest OPS when playing on their birthday with a minimum of 20 PA",
+        )
     connection.close()
     assert snippet is not None
     assert snippet.payload["minimum_value"] == 20
@@ -222,3 +227,55 @@ def test_weekday_pitching_condition_supports_specific_weekday() -> None:
     assert snippet.payload["breakdown_all_values"] is False
     assert snippet.payload["rows"][0]["player_name"] == "Tuesday Ace"
     assert snippet.payload["rows"][0]["wins"] == 2
+
+
+def test_birthday_condition_can_use_savant_birthday_index_provider() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    html = """
+    <html><body><script>
+    const serverParams = {"minGames":"10"};
+    const birthdayData = [
+      {
+        "player_name":"Frank Thomas",
+        "birthday_games":14,
+        "birthday_pa":60,
+        "birthday_BA":0.468,
+        "birthday_OPS":1.349,
+        "birthday_wOBA":0.566,
+        "birthday_hits":22,
+        "birthday_hit_hr":2,
+        "birthday_strikeout":11,
+        "birthday_walk":13,
+        "actual_birthday":"1968-05-27T00:00:00.000Z"
+      },
+      {
+        "player_name":"Someone Else",
+        "birthday_games":10,
+        "birthday_pa":47,
+        "birthday_BA":0.308,
+        "birthday_OPS":1.093,
+        "birthday_wOBA":0.438,
+        "birthday_hits":12,
+        "birthday_hit_hr":4,
+        "birthday_strikeout":4,
+        "birthday_walk":8,
+        "actual_birthday":"1992-09-17T00:00:00.000Z"
+      }
+    ];
+    </script></body></html>
+    """
+    response = Mock()
+    response.text = html
+    response.raise_for_status = Mock()
+    with patch("mlb_history_bot.birthday_index.requests.get", return_value=response):
+        snippet = researcher.build_snippet(
+            connection,
+            "which hitter has the highest OPS when playing on their birthday with at least 10 games",
+        )
+    connection.close()
+    assert snippet is not None
+    assert snippet.source == "Baseball Savant Birthday Index"
+    assert snippet.payload["rows"][0]["player_name"] == "Frank Thomas"
+    assert snippet.payload["rows"][0]["condition_games"] == 14
+    assert snippet.payload["rows"][0]["ops"] == 1.349

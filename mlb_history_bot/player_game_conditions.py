@@ -5,6 +5,7 @@ from datetime import date
 import re
 from typing import Any
 
+from .birthday_index import fetch_birthday_index_rows, is_supported_birthday_index_query
 from .config import Settings
 from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent
@@ -101,15 +102,37 @@ class PlayerGameConditionResearcher:
             return None
         if query.metric.role not in {"hitter", "player", "pitcher"}:
             return None
-        rows, metadata = fetch_condition_rows(connection, query)
+        rows: list[dict[str, Any]] = []
+        metadata: dict[str, Any] = {"total_row_count": 0}
+        source = "Retrosheet Player Game Conditions"
+        citation = "Retrosheet batting game logs joined to Lahman player metadata"
+        scope_note = (
+            "This leaderboard was computed from the full local condition-matched game log dataset. "
+            "Any explicit minimum qualifier was applied against that full result set before ranking. "
+            "The rows array is only the top display slice."
+        )
+        if is_supported_birthday_index_query(query, self.settings.live_season or date.today().year):
+            try:
+                rows, metadata = fetch_birthday_index_rows(
+                    query,
+                    current_season=self.settings.live_season or date.today().year,
+                )
+            except Exception:
+                rows, metadata = [], {"total_row_count": 0}
+            if rows or metadata.get("total_row_count"):
+                source = "Baseball Savant Birthday Index"
+                citation = "Baseball Savant Sarah Langs Birthday Index"
+                scope_note = str(metadata.get("leaderboard_scope_note") or scope_note)
+        if not rows and not metadata.get("total_row_count"):
+            rows, metadata = fetch_condition_rows(connection, query)
         if not rows and not metadata.get("total_row_count"):
             return None
         summary = build_player_game_condition_summary(query, rows, metadata)
         display_rows = rows[:12]
         return EvidenceSnippet(
-            source="Retrosheet Player Game Conditions",
+            source=source,
             title=f"{query.condition.label} {query.metric.label} leaderboard",
-            citation="Retrosheet batting game logs joined to Lahman player metadata",
+            citation=citation,
             summary=summary,
             payload={
                 "analysis_type": "player_game_condition_leaderboard",
@@ -128,11 +151,7 @@ class PlayerGameConditionResearcher:
                 "total_row_count": int(metadata.get("total_row_count") or 0),
                 "qualifying_row_count": len(rows),
                 "leaderboard_complete": True,
-                "leaderboard_scope_note": (
-                    "This leaderboard was computed from the full local condition-matched game log dataset. "
-                    "Any explicit minimum qualifier was applied against that full result set before ranking. "
-                    "The rows array is only the top display slice."
-                ),
+                "leaderboard_scope_note": scope_note,
                 "minimum_value": query.minimum_value,
                 "minimum_basis": query.minimum_basis,
                 "minimum_label": query.minimum_label,
