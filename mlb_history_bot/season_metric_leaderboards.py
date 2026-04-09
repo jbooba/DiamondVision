@@ -183,6 +183,17 @@ HITTING_ROLE_HINT_WORDS = (
     " slg ",
     " ops ",
 )
+EXPLICIT_HITTER_ENTITY_HINTS = (
+    " hitter ",
+    " hitters ",
+    " batter ",
+    " batters ",
+    " position player ",
+    " position players ",
+    " non-pitcher ",
+    " non pitchers ",
+    " non-pitchers ",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -219,6 +230,7 @@ class SeasonMetricQuery:
     minimum_starts: int | None
     aggregate_range: bool = False
     team_record_filter: str | None = None
+    exclude_pitcher_only_hitters: bool = False
 
 
 SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
@@ -483,6 +495,11 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         minimum_starts=minimum_starts,
         aggregate_range=aggregate_range,
         team_record_filter=team_record_filter,
+        exclude_pitcher_only_hitters=(
+            entity_scope == "player"
+            and role == "hitter"
+            and any(token in lowered for token in EXPLICIT_HITTER_ENTITY_HINTS)
+        ),
     )
 
 
@@ -609,6 +626,7 @@ def build_statcast_provider_fallback_query(query: SeasonMetricQuery, catalog: Me
         provider_group_preference="batting",
         minimum_starts=None,
         team_record_filter=query.team_record_filter,
+        exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
     )
 
 
@@ -644,6 +662,7 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
         minimum_starts=query.minimum_starts,
         aggregate_range=query.aggregate_range,
         team_record_filter=query.team_record_filter,
+        exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
     )
 
 
@@ -744,6 +763,35 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
         else "CAST(b.yearid AS INTEGER) AS season,"
     )
     season_group = "" if query.aggregate_range else "CAST(b.yearid AS INTEGER), "
+    role_join_sql = ""
+    role_select_sql = "0 AS pitching_ipouts, 0 AS pitching_games_started, 0 AS has_non_pitch_fielding,"
+    role_parameters: list[Any] = []
+    if query.exclude_pitcher_only_hitters:
+        role_select_sql = (
+            "COALESCE(pt.pitching_ipouts, 0) AS pitching_ipouts, "
+            "COALESCE(pt.pitching_games_started, 0) AS pitching_games_started, "
+            "CASE WHEN npf.playerid IS NULL THEN 0 ELSE 1 END AS has_non_pitch_fielding,"
+        )
+        role_join_sql = """
+        LEFT JOIN (
+            SELECT
+                playerid,
+                SUM(CAST(COALESCE(ipouts, '0') AS INTEGER)) AS pitching_ipouts,
+                SUM(CAST(COALESCE(gs, '0') AS INTEGER)) AS pitching_games_started
+            FROM lahman_pitching
+            WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+            GROUP BY playerid
+        ) AS pt
+          ON pt.playerid = b.playerid
+        LEFT JOIN (
+            SELECT DISTINCT playerid
+            FROM lahman_fielding
+            WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+              AND upper(COALESCE(pos, '')) <> 'P'
+        ) AS npf
+          ON npf.playerid = b.playerid
+        """
+        role_parameters.extend([query.start_season, query.end_season, query.start_season, query.end_season])
     rows = connection.execute(
         f"""
         SELECT
@@ -752,6 +800,7 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
             p.namefirst,
             p.namelast,
             CASE WHEN COUNT(DISTINCT upper(b.teamid)) = 1 THEN MIN(upper(b.teamid)) ELSE 'MULTI' END AS team,
+            {role_select_sql}
             SUM(CAST(COALESCE(b.g, '0') AS INTEGER)) AS games,
             SUM(CAST(COALESCE(b.ab, '0') AS INTEGER)) AS at_bats,
             SUM(CAST(COALESCE(b.r, '0') AS INTEGER)) AS runs,
@@ -770,11 +819,12 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
         FROM lahman_batting AS b
         JOIN lahman_people AS p
           ON p.playerid = b.playerid
+        {role_join_sql}
         WHERE CAST(b.yearid AS INTEGER) BETWEEN ? AND ?
           {team_filter_sql}
-        GROUP BY {season_group} b.playerid, p.namefirst, p.namelast
+        GROUP BY {season_group} b.playerid, p.namefirst, p.namelast, pitching_ipouts, pitching_games_started, has_non_pitch_fielding
         """,
-        tuple(parameters),
+        tuple(role_parameters + parameters),
     ).fetchall()
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -789,6 +839,13 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
         home_runs = safe_int(row["home_runs"]) or 0
         plate_appearances = at_bats + walks + hit_by_pitch + sacrifice_flies + sacrifice_hits
         if not passes_sample_threshold(query.metric, {"plate_appearances": plate_appearances, "at_bats": at_bats}):
+            continue
+        if query.exclude_pitcher_only_hitters and should_exclude_pitcher_only_batter(
+            plate_appearances=plate_appearances,
+            pitching_ipouts=safe_int(row["pitching_ipouts"]) or 0,
+            pitching_games_started=safe_int(row["pitching_games_started"]) or 0,
+            has_non_pitch_fielding=bool(safe_int(row["has_non_pitch_fielding"]) or 0),
+        ):
             continue
         avg = (hits / at_bats) if at_bats else None
         obp_denom = at_bats + walks + hit_by_pitch + sacrifice_flies
@@ -835,6 +892,24 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
             }
         )
     return rank_rows(candidates, query)
+
+
+def should_exclude_pitcher_only_batter(
+    *,
+    plate_appearances: int,
+    pitching_ipouts: int,
+    pitching_games_started: int,
+    has_non_pitch_fielding: bool,
+) -> bool:
+    if has_non_pitch_fielding:
+        return False
+    if plate_appearances >= 200:
+        return False
+    if pitching_games_started >= 3:
+        return True
+    if pitching_ipouts >= 27:
+        return True
+    return False
 
 
 def fetch_historical_pitcher_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:

@@ -109,6 +109,7 @@ def build_test_connection() -> sqlite3.Connection:
             ("bravo01", "Ben", "Bravo"),
             ("pitch01", "Paula", "Pitcher"),
             ("pitch02", "Rita", "Rotation"),
+            ("pitch03", "Ivan", "Nova"),
         ],
     )
     con.executemany(
@@ -120,6 +121,7 @@ def build_test_connection() -> sqlite3.Connection:
         [
             ("alpha01", "2024", "BOS", "140", "500", "90", "160", "30", "2", "28", "95", "12", "2", "65", "110", "4", "0", "5"),
             ("bravo01", "2024", "NYY", "120", "220", "20", "40", "8", "0", "2", "18", "1", "1", "15", "55", "0", "0", "2"),
+            ("pitch03", "2024", "MIA", "25", "109", "1", "2", "0", "0", "0", "0", "0", "0", "0", "65", "0", "0", "0"),
         ],
     )
     con.executemany(
@@ -139,6 +141,7 @@ def build_test_connection() -> sqlite3.Connection:
             ("pitch02", "2024", "BOS", "10", "11", "17", "17", "0", "447", "110", "52", "19", "24", "99", "2"),
             ("pitch02", "2025", "BOS", "8", "10", "18", "18", "0", "495", "118", "53", "17", "30", "115", "3"),
             ("pitch02", "2026", "BOS", "1", "2", "3", "3", "0", "72", "19", "10", "4", "7", "15", "1"),
+            ("pitch03", "2024", "MIA", "5", "12", "25", "25", "0", "600", "150", "70", "20", "35", "120", "2"),
         ],
     )
     con.executemany(
@@ -335,6 +338,19 @@ def test_historical_pitcher_walks_per_game_query_maps_to_career_leaderboard() ->
     assert snippet.payload["metric"] == "BB/G"
     assert snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
     assert snippet.payload["rows"][0]["scope_label"] == "2022-2026"
+    con.close()
+
+
+def test_explicit_hitter_query_excludes_pitcher_only_batting_rows() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "which hitter has the lowest BA over the last 10 seasons?",
+    )
+    assert snippet is not None
+    assert snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
+    assert round(snippet.payload["rows"][0]["avg"], 3) == 0.182
     con.close()
 
 
