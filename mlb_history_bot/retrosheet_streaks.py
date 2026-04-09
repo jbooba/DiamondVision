@@ -28,6 +28,9 @@ PLAY_STREAK_USECOLS = [
     "pitcher",
     "pa",
     "ab",
+    "single",
+    "double",
+    "triple",
     "k",
     "walk",
     "hr",
@@ -100,6 +103,10 @@ STEAL_STREAK_PATTERN = re.compile(
 )
 EXTRA_BASE_HIT_STREAK_PATTERN = re.compile(
     r"\bextra[- ]base hit streak\b|\bxbh streak\b|\bstreak of extra[- ]base hits?\b|\bconsecutive games?\b.*\bwith\b.*\bextra[- ]base hits?\b|\bgames?\b.*\bwith\b.*\bextra[- ]base hits?\b",
+    re.IGNORECASE,
+)
+AB_WITH_HIT_PATTERN = re.compile(
+    r"\bhits?\b.*\b(?:straight|consecutive)\b.*\bat[- ]bats?\b|\b(?:straight|consecutive)\b.*\bat[- ]bats?\b.*\bhits?\b|\bconsecutive at[- ]bats?\b.*\bhits?\b",
     re.IGNORECASE,
 )
 AB_WITH_HOME_RUN_PATTERN = re.compile(
@@ -222,6 +229,12 @@ STREAK_SPECS: tuple[StreakSpec, ...] = (
         aliases=("extra-base-hit streak", "xbh streak", "games with an extra-base hit"),
     ),
     StreakSpec(
+        key="ab_with_hit",
+        label="at-bats with a hit",
+        unit_label="AB",
+        aliases=("hits in consecutive at-bats", "at-bats with a hit", "straight at-bats with a hit"),
+    ),
+    StreakSpec(
         key="ab_with_home_run",
         label="at-bats with a home run",
         unit_label="AB",
@@ -332,6 +345,8 @@ def find_streak_spec(question: str) -> StreakSpec | None:
         return STREAK_SPEC_BY_KEY["games_with_steal"]
     if EXTRA_BASE_HIT_STREAK_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["games_with_extra_base_hit"]
+    if AB_WITH_HIT_PATTERN.search(question):
+        return STREAK_SPEC_BY_KEY["ab_with_hit"]
     if AB_WITH_HOME_RUN_PATTERN.search(question):
         return STREAK_SPEC_BY_KEY["ab_with_home_run"]
     if PITCHER_SINGLE_GAME_WALK_PATTERN.search(question):
@@ -463,12 +478,14 @@ def build_play_streak_records(
     best_by_key: dict[str, dict[str, dict[str, Any]]] = {
         "ab_without_strikeout": {},
         "pa_without_strikeout": {},
+        "ab_with_hit": {},
         "ab_with_home_run": {},
         "pitcher_game_consecutive_walks": {},
     }
     current_by_key: dict[str, dict[str, _StreakState]] = {
         "ab_without_strikeout": {},
         "pa_without_strikeout": {},
+        "ab_with_hit": {},
         "ab_with_home_run": {},
         "pitcher_game_consecutive_walks": {},
     }
@@ -490,6 +507,9 @@ def build_play_streak_records(
                 continue
             chunk["pa"] = pd.to_numeric(chunk["pa"], errors="coerce").fillna(0).astype(int)
             chunk["ab"] = pd.to_numeric(chunk["ab"], errors="coerce").fillna(0).astype(int)
+            chunk["single"] = pd.to_numeric(chunk["single"], errors="coerce").fillna(0).astype(int)
+            chunk["double"] = pd.to_numeric(chunk["double"], errors="coerce").fillna(0).astype(int)
+            chunk["triple"] = pd.to_numeric(chunk["triple"], errors="coerce").fillna(0).astype(int)
             chunk["k"] = pd.to_numeric(chunk["k"], errors="coerce").fillna(0).astype(int)
             chunk["walk"] = pd.to_numeric(chunk["walk"], errors="coerce").fillna(0).astype(int)
             chunk["hr"] = pd.to_numeric(chunk["hr"], errors="coerce").fillna(0).astype(int)
@@ -512,6 +532,18 @@ def build_play_streak_records(
                         streak_key="pa_without_strikeout",
                     )
                 if batter and row.ab:
+                    hit_in_ab = (row.single + row.double + row.triple + row.hr) > 0
+                    update_success_streak(
+                        best_by_key["ab_with_hit"],
+                        current_by_key["ab_with_hit"],
+                        batter,
+                        success=hit_in_ab,
+                        increment=1,
+                        game_date=game_date,
+                        game_id=game_id,
+                        season=season,
+                        streak_key="ab_with_hit",
+                    )
                     update_success_streak(
                         best_by_key["ab_without_strikeout"],
                         current_by_key["ab_without_strikeout"],

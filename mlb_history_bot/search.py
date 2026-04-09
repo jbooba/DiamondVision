@@ -53,6 +53,7 @@ from .retrosheet_inning_records import RetrosheetInningRecordResearcher
 from .retrosheet_streaks import RetrosheetStreakResearcher
 from .roster_comparison import RosterComparisonResearcher
 from .salary_relationships import SalaryRelationshipResearcher
+from .season_spread_leaderboards import SeasonSpreadLeaderboardResearcher
 from .season_metric_leaderboards import SeasonMetricLeaderboardResearcher
 from .season_comparison import SeasonComparisonResearcher
 from .special_leaderboards import SpecialLeaderboardResearcher
@@ -127,6 +128,7 @@ class BaseballResearchEngine:
         self.manager_era_researcher = ManagerEraAnalysisResearcher(settings)
         self.sporty_replay_finder = SportyReplayFinder(settings)
         self.salary_relationship_researcher = SalaryRelationshipResearcher(settings)
+        self.season_spread_researcher = SeasonSpreadLeaderboardResearcher(settings)
         self.season_metric_researcher = SeasonMetricLeaderboardResearcher(settings)
         self.team_evaluator = TeamEvaluator(settings)
         self.team_history_researcher = TeamHistoryRankingResearcher(settings)
@@ -225,6 +227,7 @@ class BaseballResearchEngine:
         statcast_relationship_snippet = None
         statcast_team_history_snippet = None
         season_comparison_snippet = None
+        season_spread_snippet = None
         provider_metric_snippet = None
         metric_gap_snippet = None
         try:
@@ -412,9 +415,22 @@ class BaseballResearchEngine:
             if team_history_snippet and team_split_history_snippet is None and retrosheet_streak_snippet is None and retrosheet_inning_record_snippet is None:
                 context.historical_evidence.append(team_history_snippet)
             if not (cohort_filter_requested and cohort_metric_snippet is None):
+                season_spread_snippet = self.season_spread_researcher.build_snippet(connection, question)
+                if season_spread_snippet:
+                    target_collection = (
+                        context.live_evidence
+                        if season_spread_snippet.payload.get("mode") in {"live", "hybrid"}
+                        else context.historical_evidence
+                    )
+                    target_collection.append(season_spread_snippet)
+                    context.classification = season_spread_snippet.payload.get("mode", context.classification)
+                    self._trace(context, f"Matched {season_spread_snippet.source}: {season_spread_snippet.title}")
                 season_metric_snippet = (
                     None
                     if player_game_condition_snippet is not None
+                    or season_spread_snippet is not None
+                    or retrosheet_streak_snippet is not None
+                    or retrosheet_inning_record_snippet is not None
                     else self.season_metric_researcher.build_snippet(connection, question)
                 )
                 if season_metric_snippet:
@@ -426,7 +442,11 @@ class BaseballResearchEngine:
                     target_collection.append(season_metric_snippet)
                     context.classification = season_metric_snippet.payload.get("mode", context.classification)
                     self._trace(context, f"Matched {season_metric_snippet.source}: {season_metric_snippet.title}")
-            statcast_event_snippet = self.statcast_event_researcher.build_snippet(connection, question)
+            statcast_event_snippet = (
+                None
+                if retrosheet_streak_snippet is not None or retrosheet_inning_record_snippet is not None
+                else self.statcast_event_researcher.build_snippet(connection, question)
+            )
             if statcast_event_snippet:
                 if season_metric_snippet is not None:
                     season_metric_payload = getattr(season_metric_snippet, "payload", {}) or {}
@@ -475,6 +495,7 @@ class BaseballResearchEngine:
                 or player_game_condition_snippet is not None
                 or player_team_relationship_snippet is not None
                 or player_span_metric_snippet is not None
+                or season_spread_snippet is not None
                 or player_situational_snippet is not None
                 or special_leaderboard_snippet is not None
                 or contextual_performance_snippet is not None
@@ -507,6 +528,7 @@ class BaseballResearchEngine:
                 or player_game_condition_snippet
                 or player_team_relationship_snippet
                 or player_span_metric_snippet
+                or season_spread_snippet
                 or season_metric_snippet
                 or player_situational_snippet
                 or team_split_history_snippet
@@ -545,6 +567,7 @@ class BaseballResearchEngine:
                     and team_season_leader_snippet is None
                     and player_game_condition_snippet is None
                     and player_span_metric_snippet is None
+                    and season_spread_snippet is None
                     and roster_comparison_snippet is None
                     and pitch_arsenal_snippet is None
                     and retrosheet_streak_snippet is None
@@ -608,6 +631,7 @@ class BaseballResearchEngine:
             and retrosheet_streak_snippet is None
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
+            and season_spread_snippet is None
             and season_metric_snippet is None
             and player_span_metric_snippet is None
             and special_leaderboard_snippet is None
@@ -667,6 +691,7 @@ class BaseballResearchEngine:
             and retrosheet_streak_snippet is None
             and contextual_performance_snippet is None
             and cohort_metric_snippet is None
+            and season_spread_snippet is None
             and season_metric_snippet is None
             and player_span_metric_snippet is None
             and special_leaderboard_snippet is None
