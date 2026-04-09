@@ -82,6 +82,7 @@ def build_test_connection() -> sqlite3.Connection:
         CREATE TABLE lahman_teams (
             yearid TEXT,
             teamid TEXT,
+            franchid TEXT,
             name TEXT,
             g TEXT,
             w TEXT,
@@ -143,13 +144,15 @@ def build_test_connection() -> sqlite3.Connection:
     con.executemany(
         """
         INSERT INTO lahman_teams(
-            yearid, teamid, name, g, w, l, r, ab, h, c_2b, c_3b, hr, bb, hbp, sf, ra, era, fp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            yearid, teamid, franchid, name, g, w, l, r, ab, h, c_2b, c_3b, hr, bb, hbp, sf, ra, era, fp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("2024", "BOS", "Boston Red Sox", "162", "81", "81", "751", "5500", "1450", "300", "25", "210", "550", "60", "45", "720", "4.10", ".985"),
-            ("2024", "NYY", "New York Yankees", "162", "90", "72", "720", "5525", "1350", "250", "20", "180", "500", "40", "40", "650", "3.85", ".983"),
-            ("2023", "MIA", "Miami Marlins", "162", "84", "78", "666", "5450", "1360", "260", "18", "170", "480", "42", "38", "723", "4.22", ".984"),
+            ("1900", "SPR", "SPR", "Springfield Pioneers", "140", "75", "65", "500", "1000", "400", "80", "15", "30", "120", "6", "12", "460", "3.80", ".970"),
+            ("1901", "SPR", "SPR", "Springfield Pilots", "140", "65", "75", "420", "1000", "200", "60", "10", "20", "110", "5", "10", "510", "4.20", ".968"),
+            ("2024", "BOS", "BOS", "Boston Red Sox", "162", "81", "81", "751", "5500", "1450", "300", "25", "210", "550", "60", "45", "720", "4.10", ".985"),
+            ("2024", "NYY", "NYY", "New York Yankees", "162", "90", "72", "720", "5525", "1400", "250", "20", "180", "500", "40", "40", "650", "3.85", ".983"),
+            ("2023", "MIA", "MIA", "Miami Marlins", "162", "84", "78", "666", "5450", "1360", "260", "18", "170", "480", "42", "38", "723", "4.22", ".984"),
         ],
     )
     con.executemany(
@@ -214,6 +217,22 @@ def test_historical_team_history_run_differential_with_record_filter_builds() ->
     assert snippet.payload["rows"][0]["team_name"] == "Miami Marlins"
     assert snippet.payload["rows"][0]["run_differential"] == -57
     assert snippet.payload["rows"][0]["scope_label"] == "2023"
+    con.close()
+
+
+def test_historical_team_history_combined_all_time_batting_average_aggregates_by_franchise() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "which team in major league baseball history has the lowest combined all-time batting average",
+    )
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["entity_scope"] == "team"
+    assert snippet.payload["scope_label"] == "MLB history"
+    assert snippet.payload["rows"][0]["team_name"] == "Miami Marlins"
+    assert round(snippet.payload["rows"][0]["avg"], 3) == 0.250
     con.close()
 
 

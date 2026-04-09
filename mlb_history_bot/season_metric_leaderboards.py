@@ -64,6 +64,20 @@ TEAM_HISTORY_AGGREGATE_HINTS = (
     "all-time franchise",
     "team history",
     "franchise history",
+    "combined all-time",
+    "all-time combined",
+    "combined career",
+    "career combined",
+    "cumulative",
+    "cumulative team",
+    "cumulative franchise",
+    "across all seasons",
+    "across every season",
+    "all seasons combined",
+    "combined batting average",
+    "combined ops",
+    "combined obp",
+    "combined slg",
 )
 WINNING_RECORD_HINTS = (
     "with a winning record",
@@ -1003,39 +1017,109 @@ def fetch_historical_fielder_rows(connection, query: SeasonMetricQuery) -> list[
 def fetch_historical_team_rows(connection, query: SeasonMetricQuery) -> list[dict[str, Any]]:
     if not table_exists(connection, "lahman_teams"):
         return []
-    season_select = (
-        "MIN(CAST(yearid AS INTEGER)) AS start_season, MAX(CAST(yearid AS INTEGER)) AS end_season,"
-        if query.aggregate_range
-        else "CAST(yearid AS INTEGER) AS season,"
-    )
-    season_group = "teamid, name" if query.aggregate_range else "CAST(yearid AS INTEGER), teamid, name"
-    rows = connection.execute(
-        f"""
-        SELECT
-            {season_select}
-            teamid,
-            SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS g,
-            SUM(CAST(COALESCE(w, '0') AS INTEGER)) AS w,
-            SUM(CAST(COALESCE(l, '0') AS INTEGER)) AS l,
-            SUM(CAST(COALESCE(r, '0') AS INTEGER)) AS r,
-            SUM(CAST(COALESCE(ab, '0') AS INTEGER)) AS ab,
-            SUM(CAST(COALESCE(h, '0') AS INTEGER)) AS h,
-            SUM(CAST(COALESCE(c_2b, '0') AS INTEGER)) AS c_2b,
-            SUM(CAST(COALESCE(c_3b, '0') AS INTEGER)) AS c_3b,
-            SUM(CAST(COALESCE(hr, '0') AS INTEGER)) AS hr,
-            SUM(CAST(COALESCE(bb, '0') AS INTEGER)) AS bb,
-            SUM(CAST(COALESCE(hbp, '0') AS INTEGER)) AS hbp,
-            SUM(CAST(COALESCE(sf, '0') AS INTEGER)) AS sf,
-            SUM(CAST(COALESCE(ra, '0') AS INTEGER)) AS ra,
-            AVG(CAST(NULLIF(era, '') AS REAL)) AS era,
-            AVG(CAST(NULLIF(fp, '') AS REAL)) AS fp,
-            name
-        FROM lahman_teams
-        WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
-        GROUP BY {season_group}
-        """,
-        (query.start_season, query.end_season),
-    ).fetchall()
+    team_columns = {column.lower() for column in list_table_columns(connection, "lahman_teams")}
+    if query.aggregate_range and "franchid" in team_columns:
+        rows = connection.execute(
+            """
+            WITH team_rows AS (
+                SELECT
+                    CAST(yearid AS INTEGER) AS yearid,
+                    upper(COALESCE(NULLIF(franchid, ''), teamid)) AS franchise_id,
+                    upper(teamid) AS teamid,
+                    name,
+                    CAST(COALESCE(g, '0') AS INTEGER) AS g,
+                    CAST(COALESCE(w, '0') AS INTEGER) AS w,
+                    CAST(COALESCE(l, '0') AS INTEGER) AS l,
+                    CAST(COALESCE(r, '0') AS INTEGER) AS r,
+                    CAST(COALESCE(ab, '0') AS INTEGER) AS ab,
+                    CAST(COALESCE(h, '0') AS INTEGER) AS h,
+                    CAST(COALESCE(c_2b, '0') AS INTEGER) AS c_2b,
+                    CAST(COALESCE(c_3b, '0') AS INTEGER) AS c_3b,
+                    CAST(COALESCE(hr, '0') AS INTEGER) AS hr,
+                    CAST(COALESCE(bb, '0') AS INTEGER) AS bb,
+                    CAST(COALESCE(hbp, '0') AS INTEGER) AS hbp,
+                    CAST(COALESCE(sf, '0') AS INTEGER) AS sf,
+                    CAST(COALESCE(ra, '0') AS INTEGER) AS ra,
+                    CAST(NULLIF(era, '') AS REAL) AS era,
+                    CAST(NULLIF(fp, '') AS REAL) AS fp
+                FROM lahman_teams
+                WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+            ),
+            latest_names AS (
+                SELECT
+                    tr.franchise_id,
+                    MIN(tr.name) AS name
+                FROM team_rows AS tr
+                JOIN (
+                    SELECT franchise_id, MAX(yearid) AS latest_year
+                    FROM team_rows
+                    GROUP BY franchise_id
+                ) AS latest
+                  ON latest.franchise_id = tr.franchise_id
+                 AND latest.latest_year = tr.yearid
+                GROUP BY tr.franchise_id
+            )
+            SELECT
+                MIN(tr.yearid) AS start_season,
+                MAX(tr.yearid) AS end_season,
+                tr.franchise_id AS teamid,
+                SUM(tr.g) AS g,
+                SUM(tr.w) AS w,
+                SUM(tr.l) AS l,
+                SUM(tr.r) AS r,
+                SUM(tr.ab) AS ab,
+                SUM(tr.h) AS h,
+                SUM(tr.c_2b) AS c_2b,
+                SUM(tr.c_3b) AS c_3b,
+                SUM(tr.hr) AS hr,
+                SUM(tr.bb) AS bb,
+                SUM(tr.hbp) AS hbp,
+                SUM(tr.sf) AS sf,
+                SUM(tr.ra) AS ra,
+                AVG(tr.era) AS era,
+                AVG(tr.fp) AS fp,
+                COALESCE(ln.name, tr.franchise_id) AS name
+            FROM team_rows AS tr
+            LEFT JOIN latest_names AS ln
+              ON ln.franchise_id = tr.franchise_id
+            GROUP BY tr.franchise_id, ln.name
+            """,
+            (query.start_season, query.end_season),
+        ).fetchall()
+    else:
+        season_select = (
+            "MIN(CAST(yearid AS INTEGER)) AS start_season, MAX(CAST(yearid AS INTEGER)) AS end_season,"
+            if query.aggregate_range
+            else "CAST(yearid AS INTEGER) AS season,"
+        )
+        season_group = "teamid, name" if query.aggregate_range else "CAST(yearid AS INTEGER), teamid, name"
+        rows = connection.execute(
+            f"""
+            SELECT
+                {season_select}
+                teamid,
+                SUM(CAST(COALESCE(g, '0') AS INTEGER)) AS g,
+                SUM(CAST(COALESCE(w, '0') AS INTEGER)) AS w,
+                SUM(CAST(COALESCE(l, '0') AS INTEGER)) AS l,
+                SUM(CAST(COALESCE(r, '0') AS INTEGER)) AS r,
+                SUM(CAST(COALESCE(ab, '0') AS INTEGER)) AS ab,
+                SUM(CAST(COALESCE(h, '0') AS INTEGER)) AS h,
+                SUM(CAST(COALESCE(c_2b, '0') AS INTEGER)) AS c_2b,
+                SUM(CAST(COALESCE(c_3b, '0') AS INTEGER)) AS c_3b,
+                SUM(CAST(COALESCE(hr, '0') AS INTEGER)) AS hr,
+                SUM(CAST(COALESCE(bb, '0') AS INTEGER)) AS bb,
+                SUM(CAST(COALESCE(hbp, '0') AS INTEGER)) AS hbp,
+                SUM(CAST(COALESCE(sf, '0') AS INTEGER)) AS sf,
+                SUM(CAST(COALESCE(ra, '0') AS INTEGER)) AS ra,
+                AVG(CAST(NULLIF(era, '') AS REAL)) AS era,
+                AVG(CAST(NULLIF(fp, '') AS REAL)) AS fp,
+                name
+            FROM lahman_teams
+            WHERE CAST(yearid AS INTEGER) BETWEEN ? AND ?
+            GROUP BY {season_group}
+            """,
+            (query.start_season, query.end_season),
+        ).fetchall()
     candidates: list[dict[str, Any]] = []
     for row in rows:
         games = safe_int(row["g"]) or 0
