@@ -354,6 +354,19 @@ def test_explicit_hitter_query_excludes_pitcher_only_batting_rows() -> None:
     con.close()
 
 
+def test_historical_hitter_struck_out_most_times_wording_maps_to_strikeouts() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(
+        con,
+        "which hitter has struck out the most times in mlb history",
+    )
+    assert snippet is not None
+    assert snippet.payload["metric"] == "SO"
+    assert snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
+    con.close()
+
+
 def test_initialize_database_migrates_existing_statcast_events_columns_before_indexes() -> None:
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row

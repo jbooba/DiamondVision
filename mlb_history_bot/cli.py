@@ -7,7 +7,11 @@ from pathlib import Path
 from .bootstrap import bootstrap_datasets
 from .chat import BaseballChatbot
 from .config import Settings
-from .contextual_performance import sync_retrosheet_player_count_splits, sync_retrosheet_player_opponent_contexts
+from .contextual_performance import (
+    sync_retrosheet_player_count_splits,
+    sync_retrosheet_player_opponent_contexts,
+    sync_retrosheet_player_opponent_pitcher_cohorts,
+)
 from .fielding_bible import snapshot_current_drs_leaderboards, sync_fielding_bible_data
 from .ingest import ingest_project_data
 from .retrosheet_streaks import sync_retrosheet_player_streaks
@@ -110,6 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retrosheet_context_parser.add_argument("--retrosheet-dir", type=Path)
     retrosheet_context_parser.add_argument("--chunk-size", type=int, default=250000)
+
+    retrosheet_pitcher_cohort_parser = subparsers.add_parser(
+        "sync-retrosheet-pitcher-cohorts",
+        help="Build compact hitter-vs-opponent-pitcher cohort aggregates from Retrosheet plays",
+    )
+    retrosheet_pitcher_cohort_parser.add_argument("--retrosheet-dir", type=Path)
+    retrosheet_pitcher_cohort_parser.add_argument("--chunk-size", type=int, default=250000)
 
     retrosheet_streak_parser = subparsers.add_parser(
         "sync-retrosheet-streaks",
@@ -262,6 +273,16 @@ def main() -> int:
 
     if args.command == "sync-retrosheet-contexts":
         messages = sync_retrosheet_player_opponent_contexts(
+            settings,
+            retrosheet_dir=args.retrosheet_dir or settings.raw_data_dir / "retrosheet",
+            chunk_size=args.chunk_size,
+        )
+        for message in messages:
+            print(message)
+        return 0
+
+    if args.command == "sync-retrosheet-pitcher-cohorts":
+        messages = sync_retrosheet_player_opponent_pitcher_cohorts(
             settings,
             retrosheet_dir=args.retrosheet_dir or settings.raw_data_dir / "retrosheet",
             chunk_size=args.chunk_size,

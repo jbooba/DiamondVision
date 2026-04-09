@@ -32,6 +32,7 @@ from .team_season_leaders import (
 OFFENSE_HINTS = ("offensive", "offense", "hitting", "hitter", "batting", "lineup")
 DEFENSE_HINTS = ("defensive", "defense", "fielding", "fielder", "glove")
 PITCHING_HINTS = ("pitching", "pitcher", "starter", "rotation", "reliever", "bullpen", "closer")
+RELATIONAL_OPPONENT_HINTS = (" against ", " versus ", " vs ", " facing ", " while facing ", " when facing ")
 
 
 @dataclass(slots=True)
@@ -91,11 +92,12 @@ def parse_cohort_metric_query(connection, question: str, settings: Settings) -> 
     cohort_filter = parse_cohort_filter(question)
     if cohort_filter is None:
         return None
+    lowered = f" {question.lower()} "
+    if any(token in lowered for token in RELATIONAL_OPPONENT_HINTS):
+        return None
     cohort = resolve_cohort_filter(connection, cohort_filter)
     if cohort is None:
         return None
-
-    lowered = f" {question.lower()} "
     metric_question = re.sub(r"[?.!,:'\"]", " ", lowered)
     metric = find_season_metric(metric_question)
     if cohort.kind == "award_winner" and metric is None:

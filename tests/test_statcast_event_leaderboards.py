@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from mlb_history_bot.config import Settings
-from mlb_history_bot.statcast_event_leaderboards import StatcastEventResearcher
+from mlb_history_bot.statcast_event_leaderboards import StatcastEventResearcher, parse_statcast_event_query
 from mlb_history_bot.storage import initialize_database
 
 
@@ -295,3 +295,8 @@ def test_player_event_count_leaderboard_supports_park_and_direction_filters() ->
     assert snippet.payload["leaders"][0]["player_name"] == "Pull Lefty"
     assert snippet.payload["leaders"][0]["event_count"] == 6
     connection.close()
+
+
+def test_generic_all_time_strikeout_history_question_does_not_parse_as_statcast_event() -> None:
+    assert parse_statcast_event_query("which hitter has struck out the most times in mlb history", 2026) is None
+    assert parse_statcast_event_query("which hitter is the all-time leader in strikeouts?", 2026) is None

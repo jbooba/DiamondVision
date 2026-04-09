@@ -262,6 +262,17 @@ def parse_statcast_event_query(question: str, current_season: int) -> StatcastEv
     minimum_events = extract_minimum_events(lowered)
     aggregation_mode = detect_aggregation_mode(lowered, event_label)
     start_season, end_season, start_date, end_date, scope_label = resolve_query_scope(question, current_season)
+    if should_reject_generic_history_event_query(
+        lowered,
+        metric,
+        event_label,
+        park_phrase=park_phrase,
+        direction_filter=direction_filter,
+        pitch_family=pitch_family,
+        horizontal_location=horizontal_location,
+        vertical_location=vertical_location,
+    ):
+        return None
     return StatcastEventQuery(
         metric=metric,
         descriptor=ranking_intent.descriptor,
@@ -308,6 +319,29 @@ def supports_event_count_leaderboard(lowered_question: str, event_label: str) ->
         re.search(r"\b(?:who has|who had|which player|which hitter|which batter|which team|what team)\b", lowered_question)
         or re.search(r"\b(?:most|fewest|least|highest|lowest)\b", lowered_question)
     )
+
+
+def should_reject_generic_history_event_query(
+    lowered_question: str,
+    metric: StatcastEventMetricSpec,
+    event_label: str,
+    *,
+    park_phrase: str | None,
+    direction_filter: str | None,
+    pitch_family: str | None,
+    horizontal_location: str | None,
+    vertical_location: str | None,
+) -> bool:
+    history_requested = any(token in lowered_question for token in ("mlb history", "baseball history", "all-time", "all time", "career", "ever"))
+    if not history_requested:
+        return False
+    if park_phrase or direction_filter or pitch_family or horizontal_location or vertical_location:
+        return False
+    if "statcast era" in lowered_question or "oracle park" in lowered_question or "savant" in lowered_question:
+        return False
+    if metric.key not in {"event_count", "runs_batted_in"} and event_label in {"hits", "walks", "strikeouts"}:
+        return False
+    return True
 
 
 def detect_event_filter(lowered_question: str) -> tuple[tuple[str, ...] | None, str | None]:

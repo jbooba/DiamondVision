@@ -101,6 +101,20 @@ QUALIFIER_CLAUSE_PATTERN = re.compile(
 METRIC_NORMALIZATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
+            r"\bstr(?:u|o)ck?\s+out(?:\s+the\s+(?:most|least|fewest|highest|lowest))?\s+times?\b",
+            re.IGNORECASE,
+        ),
+        "strikeouts",
+    ),
+    (
+        re.compile(
+            r"\b(?:most|least|fewest|highest|lowest)\s+times?\s+str(?:u|o)ck?\s+out\b",
+            re.IGNORECASE,
+        ),
+        "strikeouts",
+    ),
+    (
+        re.compile(
             r"\bwalk(?:ed|s)?(?:\s+the\s+(?:most|least|fewest|highest|lowest))?\s+batters?\s+per\s+game\b",
             re.IGNORECASE,
         ),

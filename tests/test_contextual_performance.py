@@ -5,6 +5,7 @@ from mlb_history_bot.contextual_performance import (
     aggregate_count_chunk,
     build_team_relationship_snippet,
     extract_reached_counts_from_sequence,
+    parse_opponent_pitcher_cohort_query,
     parse_count_split_query,
     parse_team_relationship_query,
 )
@@ -12,6 +13,7 @@ from mlb_history_bot.config import Settings
 from mlb_history_bot.storage import (
     initialize_database,
     upsert_retrosheet_player_count_splits,
+    upsert_retrosheet_player_opponent_pitcher_cohorts,
     upsert_retrosheet_player_reached_count_splits,
 )
 
@@ -278,3 +280,69 @@ def test_team_relationship_query_supports_aggregate_scope() -> None:
     assert query is not None
     assert query.metric_key == "ba"
     assert query.aggregate_scope == "player"
+
+
+def test_parse_opponent_pitcher_cohort_query_for_cy_young_winners() -> None:
+    query = parse_opponent_pitcher_cohort_query("which hitter has the best OPS against Cy Young Award Winners?")
+    assert query is not None
+    assert query.cohort_kind == "award"
+    assert query.cohort_value == "cy_young"
+    assert query.metric_key == "ops"
+
+
+def test_opponent_pitcher_cohort_snippet() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    initialize_database(connection)
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            retroid TEXT,
+            namefirst TEXT,
+            namelast TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_allplayers (
+            id TEXT,
+            first TEXT,
+            last TEXT
+        )
+        """
+    )
+    connection.execute("INSERT INTO lahman_people VALUES ('player1','slug001','Slugger','One')")
+    connection.execute("INSERT INTO retrosheet_allplayers VALUES ('slug001','Slugger','One')")
+    upsert_retrosheet_player_opponent_pitcher_cohorts(
+        connection,
+        [
+            {
+                "player_id": "player1",
+                "cohort_kind": "award",
+                "cohort_value": "cy_young",
+                "plate_appearances": 40,
+                "at_bats": 30,
+                "hits": 12,
+                "doubles": 2,
+                "triples": 0,
+                "home_runs": 3,
+                "walks": 9,
+                "intentional_walks": 1,
+                "hit_by_pitch": 0,
+                "sacrifice_flies": 1,
+                "strikeouts": 5,
+                "runs_batted_in": 14,
+                "pitchers_faced": 3,
+                "first_season": 2021,
+                "last_season": 2025,
+            }
+        ],
+    )
+    researcher = ContextualPerformanceResearcher(Settings.from_env())
+    snippet = researcher.build_snippet(connection, "which hitter has the best OPS against Cy Young Award Winners?")
+    connection.close()
+    assert snippet is not None
+    assert snippet.source == "Opponent Pitcher Cohorts"
+    assert snippet.payload["leaders"][0]["player_name"] == "Slugger One"
