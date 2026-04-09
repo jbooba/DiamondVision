@@ -275,7 +275,7 @@ class BaseballResearchEngine:
             if player_window_snippet:
                 context.live_evidence.append(player_window_snippet)
                 context.classification = player_window_snippet.payload.get("mode", "live")
-            player_situational_snippet = self.player_situational_leaderboard_researcher.build_snippet(question)
+            player_situational_snippet = self.player_situational_leaderboard_researcher.build_snippet(connection, question)
             if player_situational_snippet:
                 target_collection = (
                     context.live_evidence

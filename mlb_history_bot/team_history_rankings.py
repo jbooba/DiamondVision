@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from .config import Settings
-from .metrics import MetricCatalog, MetricDefinition
+from .metrics import MetricCatalog
 from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent
-from .query_utils import extract_first_n_games
+from .query_utils import extract_first_n_games, extract_referenced_season, extract_season_span
 from .storage import table_exists
 
 
@@ -101,6 +102,9 @@ class TeamHistoryRankingQuery:
     first_n_games: int
     sort_desc: bool
     descriptor: str
+    start_season: int | None
+    end_season: int | None
+    scope_label: str
 
 
 class TeamHistoryRankingResearcher:
@@ -120,7 +124,7 @@ class TeamHistoryRankingResearcher:
         summary = build_team_window_summary(query, rows)
         return EvidenceSnippet(
             source="Team History Rankings",
-            title=f"{query.metric.label} through first {query.first_n_games} games",
+            title=f"{query.scope_label} {query.metric.label} through first {query.first_n_games} games",
             citation="Retrosheet team game logs aggregated by team-season",
             summary=summary,
             payload={
@@ -128,6 +132,9 @@ class TeamHistoryRankingResearcher:
                 "metric": query.metric.metric_name,
                 "metric_label": query.metric.label,
                 "first_n_games": query.first_n_games,
+                "start_season": query.start_season,
+                "end_season": query.end_season,
+                "scope_label": query.scope_label,
                 "descriptor": query.descriptor,
                 "sort_desc": query.sort_desc,
                 "leaders": rows,
@@ -146,11 +153,29 @@ def parse_team_history_ranking_query(question: str, catalog: MetricCatalog) -> T
     ranking_intent = detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, require_hint=True)
     if ranking_intent is None:
         return None
+    current_season = date.today().year
+    span = extract_season_span(question, current_season)
+    referenced_season = extract_referenced_season(question, current_season)
+    if span is not None:
+        start_season = span.start_season
+        end_season = span.end_season
+        scope_label = span.label
+    elif referenced_season is not None:
+        start_season = referenced_season
+        end_season = referenced_season
+        scope_label = str(referenced_season)
+    else:
+        start_season = None
+        end_season = None
+        scope_label = "MLB history"
     return TeamHistoryRankingQuery(
         metric=metric,
         first_n_games=first_n_games,
         sort_desc=ranking_intent.sort_desc,
         descriptor=ranking_intent.descriptor,
+        start_season=start_season,
+        end_season=end_season,
+        scope_label=scope_label,
     )
 
 
@@ -172,6 +197,12 @@ def find_team_window_metric(lowered_question: str, catalog: MetricCatalog) -> Te
 
 def fetch_team_window_rankings(connection, query: TeamHistoryRankingQuery) -> list[dict[str, Any]]:
     order_direction = "DESC" if query.sort_desc else "ASC"
+    season_filter = ""
+    parameters: list[Any] = []
+    if query.start_season is not None and query.end_season is not None:
+        season_filter = "AND CAST(substr(date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
+        parameters.extend([query.start_season, query.end_season])
+    parameters.extend([query.first_n_games, query.first_n_games])
     rows = connection.execute(
         f"""
         WITH ordered_games AS (
@@ -198,6 +229,7 @@ def fetch_team_window_rankings(connection, query: TeamHistoryRankingQuery) -> li
                 ) AS game_number
             FROM retrosheet_teamstats
             WHERE stattype = 'value' AND gametype = 'regular'
+              {season_filter}
         ),
         aggregates AS (
             SELECT
@@ -241,7 +273,7 @@ def fetch_team_window_rankings(connection, query: TeamHistoryRankingQuery) -> li
         ORDER BY metric_value {order_direction}, aggregates.season ASC, team_name ASC
         LIMIT 5
         """,
-        (query.first_n_games, query.first_n_games),
+        tuple(parameters),
     ).fetchall()
     return [
         {
@@ -258,7 +290,7 @@ def fetch_team_window_rankings(connection, query: TeamHistoryRankingQuery) -> li
 def build_team_window_summary(query: TeamHistoryRankingQuery, rows: list[dict[str, Any]]) -> str:
     lead = rows[0]
     summary = (
-        f"Across imported Retrosheet history, the {query.descriptor} team {query.metric.label} through the first "
+        f"Across {query.scope_label}, the {query.descriptor} team {query.metric.label} through the first "
         f"{query.first_n_games} games of a season was the {lead['season']} {lead['team_name']} at "
         f"{format_metric_value(lead['metric_value'], query.metric.decimal_places)}."
     )

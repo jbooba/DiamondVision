@@ -7,11 +7,12 @@ from typing import Any
 from .config import Settings
 from .models import EvidenceSnippet
 from .query_intent import detect_ranking_intent, looks_like_leaderboard_question
-from .query_utils import extract_explicit_year, question_requests_current_scope
+from .query_utils import extract_referenced_season, extract_season_span, question_requests_current_scope
 from .statcast_relationships import extract_batter_name, safe_float
 from .statcast_sync import iter_sync_chunks, resolve_statcast_sync_windows
 from .pybaseball_adapter import load_statcast_range
 from .live import LiveStatsClient
+from .storage import table_exists
 
 
 HIT_EVENTS = {"single", "double", "triple", "home_run"}
@@ -51,7 +52,9 @@ class PlayerSituationalQuery:
     metric: PlayerSituationalMetricSpec
     descriptor: str
     sort_desc: bool
-    season: int | None
+    start_season: int
+    end_season: int
+    scope_label: str
     mode: str
 
 
@@ -103,30 +106,30 @@ class PlayerSituationalLeaderboardResearcher:
         self.settings = settings
         self.live_client = LiveStatsClient(settings)
 
-    def build_snippet(self, question: str) -> EvidenceSnippet | None:
+    def build_snippet(self, connection, question: str) -> EvidenceSnippet | None:
         current_season = self.settings.live_season or date.today().year
         query = parse_player_situational_query(question, current_season)
         if query is None:
             return None
-        if query.season is None:
-            return build_player_situational_gap_snippet(query, "This player split leaderboard is only grounded for the current season or an explicit Statcast season right now.")
-        if query.season < 2015:
+        if query.start_season < 2015:
             return build_player_situational_gap_snippet(query, "Public Statcast split leaderboards only exist from 2015 forward, so pre-Statcast seasons need a different source family.")
 
-        rows = run_player_situational_query(self.live_client, query)
+        rows = run_player_situational_query(connection, self.live_client, query)
         if not rows:
             return build_player_situational_gap_snippet(query, "I recognized the split leaderboard, but I did not find enough terminal Statcast events to ground it yet.")
         summary = build_player_situational_summary(query, rows)
-        mode = "live" if query.season == current_season else "historical"
+        mode = "live" if query.mode == "live" else "historical"
         return EvidenceSnippet(
             source="Player Situational Leaderboards",
-            title=f"{query.metric.label} {query.split.label} leaderboard",
-            citation="Raw Statcast terminal events aggregated to player split leaderboards",
+            title=f"{query.scope_label} {query.metric.label} {query.split.label} leaderboard",
+            citation="Local Statcast terminal-event warehouse aggregated to player split leaderboards",
             summary=summary,
             payload={
                 "analysis_type": "player_situational_leaderboard",
                 "mode": mode,
-                "season": query.season,
+                "start_season": query.start_season,
+                "end_season": query.end_season,
+                "scope_label": query.scope_label,
                 "split_key": query.split.key,
                 "split_label": query.split.label,
                 "metric": query.metric.label,
@@ -151,25 +154,41 @@ def parse_player_situational_query(question: str, current_season: int) -> Player
     ranking = detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, require_hint=True)
     if ranking is None:
         return None
-    explicit_year = extract_explicit_year(question)
-    if any(token in lowered for token in HISTORICAL_SCOPE_HINTS) and explicit_year is None:
-        season: int | None = None
+    season_span = extract_season_span(question, current_season)
+    referenced_season = extract_referenced_season(question, current_season)
+    if season_span is not None:
+        start_season = season_span.start_season
+        end_season = season_span.end_season
+        scope_label = season_span.label
         mode = "historical"
-    elif explicit_year is not None:
-        season = explicit_year
-        mode = "live" if explicit_year == current_season else "historical"
-    elif question_requests_current_scope(question) or explicit_year is None:
-        season = current_season
+    elif referenced_season is not None:
+        start_season = referenced_season
+        end_season = referenced_season
+        scope_label = str(referenced_season)
+        mode = "live" if referenced_season == current_season else "historical"
+    elif any(token in lowered for token in HISTORICAL_SCOPE_HINTS) or "statcast era" in lowered:
+        start_season = 2015
+        end_season = current_season
+        scope_label = "Statcast era"
+        mode = "historical"
+    elif question_requests_current_scope(question):
+        start_season = current_season
+        end_season = current_season
+        scope_label = str(current_season)
         mode = "live"
     else:
-        season = None
-        mode = "historical"
+        start_season = current_season
+        end_season = current_season
+        scope_label = str(current_season)
+        mode = "live"
     return PlayerSituationalQuery(
         split=split,
         metric=metric,
         descriptor=ranking.descriptor,
         sort_desc=ranking.sort_desc,
-        season=season,
+        start_season=start_season,
+        end_season=end_season,
+        scope_label=scope_label,
         mode=mode,
     )
 
@@ -200,11 +219,96 @@ def find_metric(lowered_question: str) -> PlayerSituationalMetricSpec | None:
     return best[1] if best else None
 
 
-def run_player_situational_query(live_client: LiveStatsClient, query: PlayerSituationalQuery) -> list[dict[str, Any]]:
-    if query.season is None:
+def run_player_situational_query(connection, live_client: LiveStatsClient, query: PlayerSituationalQuery) -> list[dict[str, Any]]:
+    if table_exists(connection, "statcast_events"):
+        local_rows = fetch_player_situational_rows_from_events(connection, query)
+        if local_rows:
+            return local_rows
+    if query.start_season != query.end_season or query.split.key != "risp":
         return []
+    return fetch_player_situational_rows_from_live_feed(live_client, query)
+
+
+def fetch_player_situational_rows_from_events(connection, query: PlayerSituationalQuery) -> list[dict[str, Any]]:
+    split_clause = "has_risp = 1" if query.split.key == "risp" else None
+    if split_clause is None:
+        return []
+    order_direction = "DESC" if query.sort_desc else "ASC"
+    rows = connection.execute(
+        f"""
+        WITH aggregates AS (
+            SELECT
+                batter_id AS player_id,
+                MIN(batter_name) AS player_name,
+                MIN(batting_team) AS team,
+                COUNT(*) AS plate_appearances,
+                SUM(is_ab) AS at_bats,
+                SUM(is_hit) AS hits,
+                SUM(CASE WHEN event = 'double' THEN 1 ELSE 0 END) AS doubles,
+                SUM(CASE WHEN event = 'triple' THEN 1 ELSE 0 END) AS triples,
+                SUM(is_home_run) AS home_runs,
+                SUM(CASE WHEN event IN ('walk', 'intent_walk') THEN 1 ELSE 0 END) AS walks,
+                SUM(CASE WHEN event = 'hit_by_pitch' THEN 1 ELSE 0 END) AS hit_by_pitch,
+                SUM(CASE WHEN event IN ('sac_fly', 'sac_fly_double_play') THEN 1 ELSE 0 END) AS sacrifice_flies,
+                SUM(is_strikeout) AS strikeouts
+            FROM statcast_events
+            WHERE season BETWEEN ? AND ?
+              AND event <> ''
+              AND {split_clause}
+            GROUP BY batter_id
+        )
+        SELECT
+            player_id,
+            player_name,
+            team,
+            plate_appearances,
+            at_bats,
+            hits,
+            doubles,
+            triples,
+            home_runs,
+            walks,
+            hit_by_pitch,
+            sacrifice_flies,
+            strikeouts,
+            {metric_expression(query.metric.key)} AS metric_value
+        FROM aggregates
+        WHERE {metric_expression(query.metric.key)} IS NOT NULL
+          AND (? = '' OR COALESCE(player_name, '') <> '')
+        ORDER BY metric_value {order_direction}, plate_appearances DESC, hits DESC, player_name ASC
+        LIMIT 8
+        """,
+        (query.start_season, query.end_season, ""),
+    ).fetchall()
+    leaders = []
+    for row in rows:
+        sample_value = int(row[query.metric.sample_basis] or 0) if query.metric.sample_basis else 0
+        if query.metric.sample_basis and query.metric.min_sample_size > 0 and sample_value < query.metric.min_sample_size:
+            continue
+        leaders.append(
+            {
+                "player_id": int(row["player_id"]),
+                "player_name": str(row["player_name"] or row["player_id"]),
+                "team": str(row["team"] or ""),
+                "plate_appearances": int(row["plate_appearances"] or 0),
+                "at_bats": int(row["at_bats"] or 0),
+                "hits": int(row["hits"] or 0),
+                "home_runs": int(row["home_runs"] or 0),
+                "walks": int(row["walks"] or 0),
+                "strikeouts": int(row["strikeouts"] or 0),
+                "metric_value": float(row["metric_value"]),
+            }
+        )
+    return leaders[:5]
+
+
+def fetch_player_situational_rows_from_live_feed(live_client: LiveStatsClient, query: PlayerSituationalQuery) -> list[dict[str, Any]]:
     aggregates: dict[int, dict[str, Any]] = {}
-    windows = resolve_statcast_sync_windows(live_client.settings, start_season=query.season, end_season=query.season)
+    windows = resolve_statcast_sync_windows(
+        live_client.settings,
+        start_season=query.start_season,
+        end_season=query.end_season,
+    )
     for window in windows:
         for chunk_start, chunk_end in iter_sync_chunks(window.start_date, window.end_date, 21):
             rows = load_statcast_range(chunk_start.isoformat(), chunk_end.isoformat())
@@ -248,6 +352,36 @@ def run_player_situational_query(live_client: LiveStatsClient, query: PlayerSitu
     leaders = leaders[:8]
     fill_missing_player_names(live_client, leaders)
     return leaders[:5]
+
+
+def metric_expression(metric_key: str) -> str:
+    if metric_key == "ba":
+        return "CAST(hits AS REAL) / NULLIF(at_bats, 0)"
+    if metric_key == "obp":
+        return "CAST(hits + walks + hit_by_pitch AS REAL) / NULLIF(at_bats + walks + hit_by_pitch + sacrifice_flies, 0)"
+    if metric_key == "slg":
+        return "CAST((hits - doubles - triples - home_runs) + (2 * doubles) + (3 * triples) + (4 * home_runs) AS REAL) / NULLIF(at_bats, 0)"
+    if metric_key == "ops":
+        return """
+            (
+                CAST(hits + walks + hit_by_pitch AS REAL) / NULLIF(at_bats + walks + hit_by_pitch + sacrifice_flies, 0)
+            ) + (
+                CAST((hits - doubles - triples - home_runs) + (2 * doubles) + (3 * triples) + (4 * home_runs) AS REAL) / NULLIF(at_bats, 0)
+            )
+        """
+    if metric_key == "home_runs":
+        return "CAST(home_runs AS REAL)"
+    if metric_key == "hits":
+        return "CAST(hits AS REAL)"
+    if metric_key == "walks":
+        return "CAST(walks AS REAL)"
+    if metric_key == "strikeouts":
+        return "CAST(strikeouts AS REAL)"
+    if metric_key == "plate_appearances":
+        return "CAST(plate_appearances AS REAL)"
+    if metric_key == "at_bats":
+        return "CAST(at_bats AS REAL)"
+    return "NULL"
 
 
 def aggregate_player_split_row(row: dict[str, Any], query: PlayerSituationalQuery, aggregates: dict[int, dict[str, Any]]) -> None:
@@ -387,7 +521,7 @@ def build_player_situational_summary(query: PlayerSituationalQuery, rows: list[d
     lead = rows[0]
     metric_value = format_metric_value(query.metric, float(lead["metric_value"]))
     summary = (
-        f"Across tracked Statcast terminal events in {query.season}, the {query.descriptor} "
+        f"Across tracked Statcast terminal events in {query.scope_label}, the {query.descriptor} "
         f"{query.metric.label} {query.split.label} belongs to {lead['player_name']} ({lead['team']}) at {metric_value}. "
         f"That line comes from {lead['hits']} hits in {lead['at_bats']} at-bats across {lead['plate_appearances']} plate appearances."
     )
@@ -405,13 +539,12 @@ def build_player_situational_summary(query: PlayerSituationalQuery, rows: list[d
 
 
 def build_player_situational_gap_snippet(query: PlayerSituationalQuery, reason: str) -> EvidenceSnippet:
-    season_label = str(query.season) if query.season is not None else "historical"
     return EvidenceSnippet(
         source="Player Situational Leaderboards",
         title=f"{query.metric.label} {query.split.label} source gap",
         citation="Raw Statcast split leaderboard planner",
         summary=(
-            f"I understand this as a player split leaderboard for {query.metric.label} {query.split.label} in {season_label}. "
+            f"I understand this as a player split leaderboard for {query.metric.label} {query.split.label} in {query.scope_label}. "
             f"{reason}"
         ),
         payload={

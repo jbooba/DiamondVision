@@ -7,6 +7,8 @@ from mlb_history_bot.metrics import MetricCatalog
 from mlb_history_bot.models import EvidenceSnippet
 from mlb_history_bot.query_utils import extract_first_n_games
 from mlb_history_bot.retrosheet_splits import aggregate_situational_chunk, parse_team_split_history_query
+from mlb_history_bot.statcast_team_history import parse_statcast_team_window_query
+from mlb_history_bot.team_history_rankings import parse_team_history_ranking_query
 
 
 def test_extract_first_n_games_handles_number_words() -> None:
@@ -25,6 +27,42 @@ def test_parse_team_split_history_query_for_risp() -> None:
     assert query.first_n_games == 10
     assert query.descriptor == "worst"
     assert query.sort_desc is False
+
+
+def test_parse_team_split_history_query_supports_season_span() -> None:
+    catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
+    query = parse_team_split_history_query(
+        "what team had the worst BA with RISP from 2018 to 2020 through the first ten games of a season?",
+        catalog,
+    )
+    assert query is not None
+    assert query.scope_label == "2018-2020"
+    assert query.start_season == 2018
+    assert query.end_season == 2020
+
+
+def test_parse_team_history_ranking_supports_season_span() -> None:
+    catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
+    query = parse_team_history_ranking_query(
+        "what team had the worst BA from 2018 to 2020 through the first ten games of a season?",
+        catalog,
+    )
+    assert query is not None
+    assert query.scope_label == "2018-2020"
+    assert query.start_season == 2018
+    assert query.end_season == 2020
+
+
+def test_parse_statcast_team_window_query_supports_season_span() -> None:
+    catalog = MetricCatalog.load(Path(__file__).resolve().parents[1])
+    query = parse_statcast_team_window_query(
+        "what team had the worst xBA from 2018 to 2020 through the first ten games of a season?",
+        catalog,
+    )
+    assert query is not None
+    assert query.scope_label == "2018-2020"
+    assert query.start_season == 2018
+    assert query.end_season == 2020
 
 
 def test_aggregate_situational_chunk_tracks_zero_split_games() -> None:

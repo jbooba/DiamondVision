@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from zipfile import ZipFile
@@ -11,7 +12,7 @@ import pandas as pd
 from .config import Settings
 from .metrics import MetricCatalog
 from .models import EvidenceSnippet
-from .query_utils import extract_first_n_games
+from .query_utils import extract_first_n_games, extract_referenced_season, extract_season_span
 from .storage import (
     clear_retrosheet_team_split_games,
     get_connection,
@@ -75,6 +76,9 @@ class TeamSplitHistoryQuery:
     first_n_games: int
     sort_desc: bool
     descriptor: str
+    start_season: int | None
+    end_season: int | None
+    scope_label: str
 
 
 TRACKED_SPLITS: tuple[SituationalSplitSpec, ...] = (
@@ -166,7 +170,7 @@ class RetrosheetSituationalResearcher:
             return None
         return EvidenceSnippet(
             source="Retrosheet Situational Splits",
-            title=f"{query.metric.label} {query.split.label} through first {query.first_n_games} games",
+            title=f"{query.scope_label} {query.metric.label} {query.split.label} through first {query.first_n_games} games",
             citation="Retrosheet plays.csv aggregated to team-game situational split rows",
             summary=build_team_split_window_summary(query, rows),
             payload={
@@ -176,6 +180,9 @@ class RetrosheetSituationalResearcher:
                 "split_key": query.split.key,
                 "split_label": query.split.label,
                 "first_n_games": query.first_n_games,
+                "start_season": query.start_season,
+                "end_season": query.end_season,
+                "scope_label": query.scope_label,
                 "descriptor": query.descriptor,
                 "leaders": rows,
             },
@@ -213,12 +220,30 @@ def parse_team_split_history_query(question: str, catalog: MetricCatalog) -> Tea
     else:
         sort_desc = metric.higher_is_better
         descriptor = "best"
+    current_season = date.today().year
+    span = extract_season_span(question, current_season)
+    referenced_season = extract_referenced_season(question, current_season)
+    if span is not None:
+        start_season = span.start_season
+        end_season = span.end_season
+        scope_label = span.label
+    elif referenced_season is not None:
+        start_season = referenced_season
+        end_season = referenced_season
+        scope_label = str(referenced_season)
+    else:
+        start_season = None
+        end_season = None
+        scope_label = "Retrosheet history"
     return TeamSplitHistoryQuery(
         split=split,
         metric=metric,
         first_n_games=first_n_games,
         sort_desc=sort_desc,
         descriptor=descriptor,
+        start_season=start_season,
+        end_season=end_season,
+        scope_label=scope_label,
     )
 
 
@@ -252,6 +277,12 @@ def find_split_metric(lowered_question: str, catalog: MetricCatalog) -> SplitMet
 
 def fetch_team_split_window_rankings(connection, query: TeamSplitHistoryQuery) -> list[dict[str, Any]]:
     order_direction = "DESC" if query.sort_desc else "ASC"
+    season_filter = ""
+    parameters: list[Any] = [query.split.key]
+    if query.start_season is not None and query.end_season is not None:
+        season_filter = "AND season BETWEEN ? AND ?"
+        parameters.extend([query.start_season, query.end_season])
+    parameters.extend([query.first_n_games, query.first_n_games])
     rows = connection.execute(
         f"""
         WITH ordered_games AS (
@@ -277,6 +308,7 @@ def fetch_team_split_window_rankings(connection, query: TeamSplitHistoryQuery) -
                 ) AS game_number
             FROM retrosheet_team_split_games
             WHERE split_key = ?
+              {season_filter}
         ),
         aggregates AS (
             SELECT
@@ -329,7 +361,7 @@ def fetch_team_split_window_rankings(connection, query: TeamSplitHistoryQuery) -
         ORDER BY metric_value {order_direction}, aggregates.season ASC, team_name ASC
         LIMIT 5
         """,
-        (query.split.key, query.first_n_games, query.first_n_games),
+        tuple(parameters),
     ).fetchall()
     return [
         {
@@ -354,7 +386,7 @@ def fetch_team_split_window_rankings(connection, query: TeamSplitHistoryQuery) -
 def build_team_split_window_summary(query: TeamSplitHistoryQuery, rows: list[dict[str, Any]]) -> str:
     lead = rows[0]
     summary = (
-        f"Across imported Retrosheet split history, the {query.descriptor} team {query.metric.label} {query.split.label} "
+        f"Across {query.scope_label}, the {query.descriptor} team {query.metric.label} {query.split.label} "
         f"through the first {query.first_n_games} games of a season was the {lead['season']} {lead['team_name']} at "
         f"{format_metric_value(lead['metric_value'], query.metric.decimal_places)}."
     )
