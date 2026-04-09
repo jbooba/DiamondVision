@@ -27,7 +27,24 @@ from .provider_metrics import (
     contains_metric_term,
     find_provider_metric,
 )
-from .query_utils import extract_explicit_year, normalize_person_name
+from .query_utils import extract_referenced_season, normalize_person_name
+from .season_metric_leaderboards import (
+    SeasonMetricSpec,
+    build_statcast_history_metric_spec,
+    find_statcast_history_metric,
+    format_statcast_history_player_name,
+    infer_statcast_history_sample_size,
+    statcast_history_sample_values,
+)
+from .storage import (
+    STATCAST_HISTORY_BATTER_TABLE,
+    STATCAST_HISTORY_PITCHER_TABLE,
+    get_connection,
+    list_table_columns,
+    quote_identifier,
+    resolve_column,
+    table_exists,
+)
 from .team_evaluator import safe_float
 
 
@@ -54,6 +71,8 @@ class PlayerMetricQuery:
     mode: str
     wants_percentile: bool
     provider_spec: Any | None = None
+    history_spec: SeasonMetricSpec | None = None
+    preferred_role: str | None = None
 
 
 class PlayerMetricLookupResearcher:
@@ -64,24 +83,36 @@ class PlayerMetricLookupResearcher:
 
     def build_snippet(self, question: str) -> EvidenceSnippet | None:
         current_season = self.settings.live_season or date.today().year
-        query = parse_player_metric_query(question, self.live_client, self.catalog, current_season)
-        if query is None:
-            return None
-        if query.metric_name == "OAA":
-            result = fetch_oaa_result(self.live_client, query)
-        else:
-            result = fetch_provider_metric_result(query)
+        connection = get_connection(self.settings.database_path)
+        try:
+            query = parse_player_metric_query(
+                question,
+                self.live_client,
+                self.catalog,
+                current_season,
+                connection=connection,
+            )
+            if query is None:
+                return None
+            if query.metric_name == "OAA":
+                result = fetch_oaa_result(self.live_client, query)
+            else:
+                result = fetch_provider_metric_result(query)
+                if result is None:
+                    result = fetch_statcast_metric_result(query)
+                if result is None:
+                    result = fetch_statcast_history_metric_result(connection, query)
             if result is None:
-                result = fetch_statcast_metric_result(query)
-        if result is None:
-            return None
-        return EvidenceSnippet(
-            source=result["source"],
-            title=result["title"],
-            citation=result["citation"],
-            summary=result["summary"],
-            payload=result["payload"],
-        )
+                return None
+            return EvidenceSnippet(
+                source=result["source"],
+                title=result["title"],
+                citation=result["citation"],
+                summary=result["summary"],
+                payload=result["payload"],
+            )
+        finally:
+            connection.close()
 
 
 def parse_player_metric_query(
@@ -89,6 +120,8 @@ def parse_player_metric_query(
     live_client: LiveStatsClient,
     catalog: MetricCatalog,
     current_season: int,
+    *,
+    connection=None,
 ) -> PlayerMetricQuery | None:
     lowered = question.lower().strip()
     if lowered.startswith("show me ") and " off " in lowered and any(
@@ -101,10 +134,10 @@ def parse_player_metric_query(
         return None
     if any(token in lowered for token in ("team", "roster", "lineup")):
         return None
-    metric_name, provider_spec = detect_player_metric(lowered, catalog)
+    metric_name, provider_spec, history_spec = detect_player_metric(lowered, catalog, connection=connection)
     if metric_name is None:
         return None
-    player_query = extract_player_query_for_metric(question, metric_name, provider_spec)
+    player_query = extract_player_query_for_metric(question, metric_name, provider_spec, history_spec)
     if not player_query:
         return None
     people = live_client.search_people(player_query)
@@ -114,7 +147,11 @@ def parse_player_metric_query(
     player_id = int(person.get("id") or 0)
     if not player_id:
         return None
-    season = extract_explicit_year(question) or current_season
+    preferred_role = infer_person_role(person)
+    if history_spec is not None and preferred_role in {"hitter", "pitcher"}:
+        history_spec = resolve_history_spec_for_role(connection, history_spec, preferred_role) or history_spec
+        metric_name = display_statcast_history_metric_label(history_spec.label)
+    season = extract_referenced_season(question, current_season) or current_season
     mode = "live" if season == current_season else "historical"
     return PlayerMetricQuery(
         player_name=str(person.get("fullName") or player_query).strip(),
@@ -124,22 +161,40 @@ def parse_player_metric_query(
         mode=mode,
         wants_percentile="percentile" in lowered,
         provider_spec=provider_spec,
+        history_spec=history_spec,
+        preferred_role=preferred_role,
     )
 
 
-def detect_player_metric(lowered_question: str, catalog: MetricCatalog) -> tuple[str | None, Any | None]:
+def detect_player_metric(
+    lowered_question: str,
+    catalog: MetricCatalog,
+    *,
+    connection=None,
+) -> tuple[str | None, Any | None, SeasonMetricSpec | None]:
     provider_metric = find_provider_metric(lowered_question, catalog)
     if provider_metric is not None:
-        return provider_metric.metric_name, provider_metric
+        return provider_metric.metric_name, provider_metric, None
     if contains_metric_term(lowered_question, "oaa") or "outs above average" in lowered_question:
-        return "OAA", None
-    return None, None
+        return "OAA", None, None
+    if connection is not None:
+        history_spec = find_statcast_history_metric(connection, lowered_question)
+        if history_spec is not None:
+            return display_statcast_history_metric_label(history_spec.label), None, history_spec
+    return None, None, None
 
 
-def extract_player_query_for_metric(question: str, metric_name: str, provider_spec: Any | None) -> str | None:
+def extract_player_query_for_metric(
+    question: str,
+    metric_name: str,
+    provider_spec: Any | None,
+    history_spec: SeasonMetricSpec | None = None,
+) -> str | None:
     metric_terms = [metric_name]
     if provider_spec is not None:
         metric_terms.extend(provider_spec.aliases)
+    if history_spec is not None:
+        metric_terms.extend(history_spec.aliases)
     from .player_season_analysis import extract_player_query_text
 
     direct = extract_player_query_text(question)
@@ -165,6 +220,17 @@ def extract_player_query_for_metric(question: str, metric_name: str, provider_sp
 
 def clean_player_phrase(value: str) -> str:
     return shared_clean_player_phrase(value)
+
+
+def infer_person_role(person: dict[str, Any]) -> str | None:
+    position = person.get("primaryPosition") or {}
+    abbreviation = str(position.get("abbreviation") or "").strip().upper()
+    code = str(position.get("code") or "").strip()
+    if abbreviation == "P" or code == "1":
+        return "pitcher"
+    if abbreviation or code:
+        return "hitter"
+    return None
 
 
 def fetch_provider_metric_result(query: PlayerMetricQuery) -> dict[str, Any] | None:
@@ -360,6 +426,131 @@ def fetch_statcast_metric_result(query: PlayerMetricQuery) -> dict[str, Any] | N
             ],
         },
     }
+
+
+def fetch_statcast_history_metric_result(connection, query: PlayerMetricQuery) -> dict[str, Any] | None:
+    spec = query.history_spec
+    if spec is None:
+        return None
+    row, resolved_spec = fetch_statcast_history_row(connection, query, spec)
+    if row is None or resolved_spec is None:
+        return None
+    value_column = resolved_spec.dynamic_value_column or ""
+    metric_value = safe_float(row[value_column])
+    if metric_value is None:
+        return None
+    display_metric = display_statcast_history_metric_label(resolved_spec.label)
+    formatted_value = format_metric_value_with_formatter(metric_value, resolved_spec.formatter)
+    values = statcast_history_sample_values(row)
+    sample_size = infer_statcast_history_sample_size(values, resolved_spec.sample_basis, metric_value)
+    summary = (
+        f"{query.player_name} was at {formatted_value} {display_metric} in {query.season}."
+    )
+    context = build_statcast_history_context(row, resolved_spec)
+    if context:
+        summary = f"{summary} Imported Statcast context: {', '.join(context)}."
+    source_group = "pitching" if resolved_spec.role == "pitcher" else "batting"
+    return {
+        "source": "Statcast Custom History",
+        "title": f"{query.player_name} {query.season} {display_metric}",
+        "citation": f"Imported Statcast custom leaderboard row from {resolved_spec.dynamic_table_name}",
+        "summary": summary,
+        "payload": {
+            "analysis_type": "player_metric_lookup",
+            "mode": query.mode,
+            "player": query.player_name,
+            "season": query.season,
+            "metric": display_metric,
+            "source_group": source_group,
+            "rows": [
+                {
+                    "player": query.player_name,
+                    "season": query.season,
+                    "team": "",
+                    "group": source_group,
+                    "metric": display_metric,
+                    "value": formatted_value,
+                    "sample_size": sample_size,
+                    "context_1": context[0] if context else "",
+                    "context_2": context[1] if len(context) > 1 else "",
+                }
+            ],
+        },
+    }
+
+
+def fetch_statcast_history_row(connection, query: PlayerMetricQuery, spec: SeasonMetricSpec) -> tuple[Any | None, SeasonMetricSpec | None]:
+    candidate_specs: list[SeasonMetricSpec] = [spec]
+    if query.preferred_role in {"hitter", "pitcher"} and spec.role != query.preferred_role:
+        alternate = resolve_history_spec_for_role(connection, spec, query.preferred_role)
+        if alternate is not None:
+            candidate_specs.insert(0, alternate)
+    for candidate in candidate_specs:
+        row = select_matching_history_row(connection, query, candidate)
+        if row is not None:
+            return row, candidate
+    return None, None
+
+
+def resolve_history_spec_for_role(connection, spec: SeasonMetricSpec, role: str) -> SeasonMetricSpec | None:
+    table_name = STATCAST_HISTORY_PITCHER_TABLE if role == "pitcher" else STATCAST_HISTORY_BATTER_TABLE
+    if not table_exists(connection, table_name):
+        return None
+    candidate_column = resolve_column(connection, table_name, (spec.dynamic_value_column or spec.key, spec.key))
+    if candidate_column is None:
+        return None
+    return build_statcast_history_metric_spec(column=candidate_column, table_name=table_name, role=role)
+
+
+def select_matching_history_row(connection, query: PlayerMetricQuery, spec: SeasonMetricSpec):
+    table_name = spec.dynamic_table_name or ""
+    value_column = spec.dynamic_value_column or ""
+    if not table_name or not value_column or not table_exists(connection, table_name):
+        return None
+    player_id_column = resolve_column(connection, table_name, ("player_id", "playerid"))
+    season_column = resolve_column(connection, table_name, ("year", "season", "season_year"))
+    name_column = resolve_column(connection, table_name, ("last_name_first_name", "player_name", "name"))
+    if season_column is None or name_column is None or value_column not in list_table_columns(connection, table_name):
+        return None
+    rows = connection.execute(
+        f"""
+        SELECT *
+        FROM {quote_identifier(table_name)}
+        WHERE CAST({quote_identifier(season_column)} AS INTEGER) = ?
+        """,
+        (query.season,),
+    ).fetchall()
+    normalized_target = normalize_person_name(query.player_name)
+    for row in rows:
+        row_player_id = safe_float(row[player_id_column]) if player_id_column and player_id_column in row.keys() else None
+        if row_player_id is not None and int(row_player_id) == query.player_id:
+            return row
+        matched_name = format_statcast_history_player_name(row[name_column])
+        if normalize_person_name(matched_name) == normalized_target:
+            return row
+    return None
+
+
+def build_statcast_history_context(row: Any, spec: SeasonMetricSpec) -> list[str]:
+    values = statcast_history_sample_values(row)
+    details: list[str] = []
+    if spec.role == "pitcher":
+        if values.get("pitch_count") is not None:
+            details.append(f"{int(round(float(values['pitch_count'] or 0.0)))} pitches")
+        if values.get("pa") is not None:
+            details.append(f"{int(round(float(values['pa'] or 0.0)))} PA")
+        era = safe_float(row["p_era"]) if "p_era" in row.keys() else None
+        if era is not None:
+            details.append(f"{format_metric_value_with_formatter(era, '.2f')} ERA")
+    else:
+        if values.get("pa") is not None:
+            details.append(f"{int(round(float(values['pa'] or 0.0)))} PA")
+        if values.get("batted_ball") is not None:
+            details.append(f"{int(round(float(values['batted_ball'] or 0.0)))} BBE")
+        ops = safe_float(row["on_base_plus_slg"]) if "on_base_plus_slg" in row.keys() else None
+        if ops is not None:
+            details.append(f"{format_metric_value_with_formatter(ops, '.3f')} OPS")
+    return details[:2]
 
 
 def fetch_statcast_raw_rows(query: PlayerMetricQuery) -> list[dict[str, Any]]:
@@ -665,3 +856,22 @@ def format_row_value(value: Any) -> str:
     if text.startswith("."):
         return f"0{text}"
     return text
+
+
+def format_metric_value_with_formatter(value: Any, formatter: str) -> str:
+    converted = safe_float(value)
+    if converted is None:
+        return "unknown"
+    try:
+        text = format(float(converted), formatter)
+    except (TypeError, ValueError):
+        return format_metric_value(converted)
+    if formatter == ".0f":
+        return str(int(round(float(converted))))
+    return text.rstrip("0").rstrip(".")
+
+
+def display_statcast_history_metric_label(label: str) -> str:
+    if label.endswith(" Percent"):
+        return label[: -len(" Percent")] + "%"
+    return label

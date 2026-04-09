@@ -911,7 +911,9 @@ def build_statcast_history_aliases(column: str, role: str) -> set[str]:
         aliases.update(pitch_metric)
     if stripped.endswith("_percent"):
         base = stripped[: -len("_percent")].replace("_", " ")
-        aliases.update({f"{base} percent", f"{base} percentage", f"{base} rate"})
+        aliases.update({f"{base} percent", f"{base} percentage", f"{base} rate", f"{base}%"})
+        if base == "whiff":
+            aliases.update({"whiff", "whiffs"})
     if stripped.endswith("_avg_speed"):
         base = stripped[: -len("_avg_speed")].replace("_", " ")
         aliases.update({f"{base} average speed", f"{base} avg speed", f"{base} velocity", f"{base} average velocity"})
