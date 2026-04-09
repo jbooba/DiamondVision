@@ -155,6 +155,10 @@ class LiveStatsClient:
         people = payload.get("people") or []
         return people[0] if people else None
 
+    def award_recipients(self, award_id: str) -> list[dict[str, Any]]:
+        payload = self.fetch_json(f"https://statsapi.mlb.com/api/v1/awards/{award_id}/recipients")
+        return payload.get("awards") or []
+
     def player_season_snapshot(self, player_query: str, season: int | None = None) -> dict[str, Any] | None:
         people = self.search_people(player_query)
         if not people:

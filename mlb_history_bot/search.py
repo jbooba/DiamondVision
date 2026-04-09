@@ -5,6 +5,7 @@ import sqlite3
 from datetime import date
 from typing import Any
 
+from .award_history import AwardHistoryResearcher
 from .config import Settings
 from .cohort_metric_leaderboards import CohortMetricLeaderboardResearcher
 from .cohort_timeline import parse_cohort_filter
@@ -113,6 +114,7 @@ class BaseballResearchEngine:
         self.catalog = MetricCatalog.load(settings.project_root)
         self.live_client = LiveStatsClient(settings)
         self.contextual_performance_researcher = ContextualPerformanceResearcher(settings)
+        self.award_history_researcher = AwardHistoryResearcher(settings)
         self.cohort_metric_researcher = CohortMetricLeaderboardResearcher(settings)
         self.drs_helper = DrsResearchHelper(settings)
         self.daily_lookup_researcher = DailyLookupResearcher(settings)
@@ -190,6 +192,7 @@ class BaseballResearchEngine:
         historical_team_snippet = None
         historical_team_fact_snippet = None
         manager_era_snippet = None
+        award_history_snippet = None
         cohort_metric_snippet = None
         player_metric_snippet = None
         player_game_condition_snippet = None
@@ -230,6 +233,11 @@ class BaseballResearchEngine:
             if live_game_snippet:
                 context.live_evidence.append(live_game_snippet)
                 context.classification = "live"
+            award_history_snippet = self.award_history_researcher.build_snippet(question)
+            if award_history_snippet:
+                context.historical_evidence.append(award_history_snippet)
+                context.classification = award_history_snippet.payload.get("mode", "historical")
+                self._trace(context, f"Matched {award_history_snippet.source}: {award_history_snippet.title}")
             player_metric_snippet = self.player_metric_lookup_researcher.build_snippet(question)
             if player_metric_snippet:
                 target_collection = (

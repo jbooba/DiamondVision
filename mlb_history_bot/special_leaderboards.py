@@ -2,46 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .award_history import AWARD_HINTS
 from .config import Settings
 from .metrics import MetricCatalog
 from .models import EvidenceSnippet
 from .storage import resolve_column, table_exists
-
-
-AWARD_HINTS = {
-    "Cy Young winners": (
-        "cy young winner",
-        "cy young winners",
-        "won the cy young award",
-        "have won the cy young award",
-        "cy young award",
-    ),
-    "MVP winners": (
-        "mvp winner",
-        "mvp winners",
-        "most valuable player",
-        "won the mvp award",
-        "have won the mvp award",
-    ),
-    "Gold Glove winners": (
-        "gold glove winner",
-        "gold glove winners",
-        "won the gold glove",
-        "have won the gold glove",
-    ),
-    "Silver Slugger winners": (
-        "silver slugger winner",
-        "silver slugger winners",
-        "won the silver slugger",
-        "have won the silver slugger",
-    ),
-    "Rookie of the Year winners": (
-        "rookie of the year winner",
-        "rookie of the year winners",
-        "won rookie of the year",
-        "have won rookie of the year",
-    ),
-}
 EXCLUDED_CONTEXT_METRICS = {"WAR"}
 
 

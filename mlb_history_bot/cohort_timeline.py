@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .award_history import AWARD_DEFINITIONS_BY_KEY, AwardDefinition, find_award_definition
 from .manager_era_analysis import ManagerSeason, ManagerEraQuery, fetch_manager_seasons
 from .pybaseball_adapter import load_all_star_full, load_all_star_game_logs
 from .salary_relationships import COUNTRY_ALIASES
@@ -47,6 +48,7 @@ class CohortFilter:
     label: str
     team_phrase: str | None = None
     manager_name: str | None = None
+    award_key: str | None = None
     country_filter: tuple[str, ...] | None = None
     bats_filter: tuple[str, ...] | None = None
     throws_filter: tuple[str, ...] | None = None
@@ -59,6 +61,7 @@ class ResolvedCohort:
     seasons: tuple[int, ...]
     team_code: str | None = None
     team_name: str | None = None
+    award_key: str | None = None
     player_ids: set[str] | None = None
     player_names: set[str] | None = None
     country_filter: tuple[str, ...] | None = None
@@ -73,6 +76,7 @@ def parse_cohort_filter(question: str) -> CohortFilter | None:
     for parser in (
         parse_birth_country_filter,
         parse_handedness_filter,
+        parse_award_filter,
         parse_all_star_filter,
         parse_hall_of_fame_filter,
     ):
@@ -142,6 +146,13 @@ def parse_hall_of_fame_filter(question: str) -> CohortFilter | None:
     return CohortFilter(kind="hall_of_fame", label="Hall of Famers")
 
 
+def parse_award_filter(question: str) -> CohortFilter | None:
+    definition = find_award_definition(question)
+    if definition is None:
+        return None
+    return CohortFilter(kind="award_winner", label=definition.label, award_key=definition.key)
+
+
 def parse_all_star_filter(question: str) -> CohortFilter | None:
     if ALL_STAR_PATTERN.search(question) is None:
         return None
@@ -166,6 +177,18 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             team_code=seasons[0].team_id,
             team_name=seasons[0].team_name,
         )
+    if cohort.kind == "award_winner":
+        player_ids, player_names = load_award_identities(connection, cohort.award_key)
+        if not player_ids and not player_names:
+            return None
+        return ResolvedCohort(
+            kind="award_winner",
+            label=cohort.label,
+            seasons=tuple(),
+            award_key=cohort.award_key,
+            player_ids=player_ids,
+            player_names=player_names,
+        )
     if cohort.kind == "birth_country":
         player_ids, player_names = load_birth_country_people(connection, cohort.country_filter or tuple())
         if not player_ids:
@@ -174,6 +197,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             kind="birth_country",
             label=cohort.label,
             seasons=tuple(),
+            award_key=cohort.award_key,
             player_ids=player_ids,
             player_names=player_names,
             country_filter=cohort.country_filter,
@@ -186,6 +210,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             kind="bat_handedness",
             label=cohort.label,
             seasons=tuple(),
+            award_key=cohort.award_key,
             player_ids=player_ids,
             player_names=player_names,
             bats_filter=cohort.bats_filter,
@@ -198,6 +223,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             kind="throw_handedness",
             label=cohort.label,
             seasons=tuple(),
+            award_key=cohort.award_key,
             player_ids=player_ids,
             player_names=player_names,
             throws_filter=cohort.throws_filter,
@@ -210,6 +236,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             kind="hall_of_fame",
             label=cohort.label,
             seasons=tuple(),
+            award_key=cohort.award_key,
             player_ids=player_ids,
             player_names=player_names,
         )
@@ -221,6 +248,7 @@ def resolve_cohort_filter(connection, cohort: CohortFilter) -> ResolvedCohort | 
             kind="all_star",
             label=cohort.label,
             seasons=tuple(),
+            award_key=cohort.award_key,
             player_ids=player_ids,
             player_names=player_names,
         )
@@ -316,6 +344,43 @@ def load_all_star_identities(connection) -> tuple[set[str], set[str]]:
         return set(), set()
     names = extract_all_star_game_log_names(log_rows)
     return lookup_people_identities_by_names(connection, names)
+
+
+def load_award_identities(connection, award_key: str | None) -> tuple[set[str], set[str]]:
+    if not award_key:
+        return set(), set()
+    definition = AWARD_DEFINITIONS_BY_KEY.get(award_key)
+    if definition is None:
+        return set(), set()
+    names = load_award_recipient_names(definition)
+    if not names:
+        return set(), set()
+    return lookup_people_identities_by_names(connection, names)
+
+
+def load_award_recipient_names(definition: AwardDefinition) -> set[str]:
+    try:
+        import json
+        from urllib.request import Request, urlopen
+    except ImportError:
+        return set()
+    names: set[str] = set()
+    for award_id in definition.award_ids:
+        request = Request(
+            f"https://statsapi.mlb.com/api/v1/awards/{award_id}/recipients",
+            headers={"User-Agent": "DiamondVision/1.0", "Accept": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            continue
+        for row in payload.get("awards") or []:
+            player = row.get("player") or {}
+            player_name = str(player.get("nameFirstLast") or player.get("name") or "").strip().lower()
+            if player_name:
+                names.add(player_name)
+    return names
 
 
 def extract_all_star_full_identities(rows: list[dict[str, Any]]) -> tuple[set[str], set[str]]:

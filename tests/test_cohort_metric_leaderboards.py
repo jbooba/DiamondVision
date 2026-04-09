@@ -498,6 +498,42 @@ def test_switch_hitter_statcast_cohort_reports_local_gap_when_no_statcast_rows()
     con.close()
 
 
+def test_award_winner_cohort_resolves_with_explicit_metric() -> None:
+    con = build_test_connection()
+    con.executemany(
+        """
+        INSERT INTO lahman_people(playerid, retroid, namefirst, namelast, birthcountry, bats, throws)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("skubta01", "skubt001", "Tarik", "Skubal", "USA", "L", "L"),
+            ("rayro01", "rayr001", "Robbie", "Ray", "USA", "L", "L"),
+        ],
+    )
+    con.executemany(
+        """
+        INSERT INTO lahman_pitching(
+            playerid, yearid, teamid, w, l, g, gs, sv, ipouts, h, er, hr, bb, so
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("skubta01", "2025", "DET", "18", "6", "31", "31", "0", "585", "140", "58", "18", "40", "228"),
+            ("rayro01", "2021", "TOR", "13", "7", "32", "32", "0", "579", "150", "67", "33", "52", "248"),
+        ],
+    )
+    con.commit()
+    researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)
+    with patch(
+        "mlb_history_bot.cohort_timeline.load_award_identities",
+        return_value=({"skubta01", "rayro01"}, {"tarik skubal", "robbie ray"}),
+    ):
+        snippet = researcher.build_snippet(con, "which Cy Young winner had the lowest ERA?")
+    assert snippet is not None
+    assert snippet.payload["cohort_kind"] == "award_winner"
+    assert snippet.payload["rows"][0]["player_name"] == "Tarik Skubal"
+    con.close()
+
+
 def test_all_star_cohort_uses_dynamic_player_set_for_career_queries() -> None:
     con = build_test_connection()
     researcher = CohortMetricLeaderboardResearcher(TEST_SETTINGS)

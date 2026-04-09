@@ -18,7 +18,7 @@ from .season_metric_leaderboards import (
     passes_sample_threshold,
     statcast_batter_metric_values,
 )
-from .storage import table_exists
+from .storage import list_table_columns, table_exists
 from .team_evaluator import safe_float, safe_int
 from .team_season_leaders import (
     build_person_name,
@@ -98,6 +98,8 @@ def parse_cohort_metric_query(connection, question: str, settings: Settings) -> 
     lowered = f" {question.lower()} "
     metric_question = re.sub(r"[?.!,:'\"]", " ", lowered)
     metric = find_season_metric(metric_question)
+    if cohort.kind == "award_winner" and metric is None:
+        return None
     if metric is None or metric.entity_scope != "player" or metric.source_family not in {"historical", "statcast"}:
         metric = default_metric_for_cohort(question)
     if metric is None:
@@ -327,9 +329,20 @@ def fetch_statcast_rows(connection, query: CohortMetricQuery) -> list[dict[str, 
 
 
 def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
-    rows = fetch_statcast_hitting_summary_rows(connection, query)
-    if not rows:
-        rows = fetch_statcast_hitting_rows_from_events(connection, query)
+    row_sources = (
+        (fetch_statcast_hitting_rows_from_events, fetch_statcast_hitting_summary_rows)
+        if query.cohort.kind == "bat_handedness"
+        else (fetch_statcast_hitting_summary_rows, fetch_statcast_hitting_rows_from_events)
+    )
+    for fetcher in row_sources:
+        rows = fetcher(connection, query)
+        candidates = build_statcast_candidates(rows, query)
+        if candidates:
+            return rank_rows(candidates, query)
+    return []
+
+
+def build_statcast_candidates(rows, query: CohortMetricQuery) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for row in rows:
         metrics = statcast_batter_metric_values(row)
@@ -370,7 +383,7 @@ def fetch_statcast_hitting_rows(connection, query: CohortMetricQuery) -> list[di
                 "last_season": safe_int(row["last_season"]) or 0,
             }
         )
-    return rank_rows(candidates, query)
+    return candidates
 
 
 def fetch_statcast_hitting_summary_rows(connection, query: CohortMetricQuery):
@@ -536,6 +549,12 @@ def normalize_statcast_stand_filter(bats_filter: tuple[str, ...] | None) -> tupl
 def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, Any]]:
     if not (table_exists(connection, "lahman_pitching") and table_exists(connection, "lahman_people")):
         return []
+    pitching_columns = {column.lower() for column in list_table_columns(connection, "lahman_pitching")}
+    hit_by_pitch_expr = (
+        "SUM(CAST(COALESCE(pch.hbp, '0') AS INTEGER))"
+        if "hbp" in pitching_columns
+        else "0"
+    )
     where_clause, parameters = build_where_clauses(
         query,
         season_column="pch.yearid",
@@ -561,7 +580,8 @@ def fetch_pitching_rows(connection, query: CohortMetricQuery) -> list[dict[str, 
             SUM(CAST(COALESCE(pch.er, '0') AS INTEGER)) AS earned_runs,
             SUM(CAST(COALESCE(pch.hr, '0') AS INTEGER)) AS home_runs_allowed,
             SUM(CAST(COALESCE(pch.bb, '0') AS INTEGER)) AS walks,
-            SUM(CAST(COALESCE(pch.so, '0') AS INTEGER)) AS strikeouts
+            SUM(CAST(COALESCE(pch.so, '0') AS INTEGER)) AS strikeouts,
+            {hit_by_pitch_expr} AS hit_by_pitch
         FROM lahman_pitching AS pch
         JOIN lahman_people AS ppl
           ON ppl.playerid = pch.playerid
