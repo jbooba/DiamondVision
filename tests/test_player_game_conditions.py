@@ -52,6 +52,41 @@ def build_connection() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_pitching (
+            gid TEXT,
+            id TEXT,
+            team TEXT,
+            p_seq TEXT,
+            stattype TEXT,
+            p_ipouts TEXT,
+            p_h TEXT,
+            p_hr TEXT,
+            p_r TEXT,
+            p_er TEXT,
+            p_w TEXT,
+            p_iw TEXT,
+            p_k TEXT,
+            p_hbp TEXT,
+            wp TEXT,
+            lp TEXT,
+            save TEXT,
+            p_gs TEXT,
+            date TEXT,
+            gametype TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_allplayers (
+            id TEXT,
+            last TEXT,
+            first TEXT
+        )
+        """
+    )
     connection.executemany(
         "INSERT INTO lahman_people (retroid, namefirst, namelast, birthmonth, birthday) VALUES (?, ?, ?, ?, ?)",
         [
@@ -59,6 +94,18 @@ def build_connection() -> sqlite3.Connection:
             ("beta001", "Beta", "Slugger", "7", "4"),
             ("gamma001", "Gamma", "Slugger", "7", "5"),
             ("delta001", "Delta", "Slugger", "7", "4"),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO retrosheet_allplayers (id, last, first) VALUES (?, ?, ?)",
+        [
+            ("alpha001", "Slugger", "Alpha"),
+            ("beta001", "Slugger", "Beta"),
+            ("gamma001", "Slugger", "Gamma"),
+            ("delta001", "Slugger", "Delta"),
+            ("ace001", "Ace", "Monday"),
+            ("ace002", "Ace", "Tuesday"),
+            ("ace003", "Ace", "Wednesday"),
         ],
     )
     connection.executemany(
@@ -79,6 +126,21 @@ def build_connection() -> sqlite3.Connection:
             ("g8", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20200704", "regular"),
             ("g9", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20210704", "regular"),
             ("g10", "delta001", "value", "5", "4", "1", "2", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "20220704", "regular"),
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO retrosheet_pitching (
+            gid, id, team, p_seq, stattype, p_ipouts, p_h, p_hr, p_r, p_er, p_w, p_iw, p_k, p_hbp, wp, lp, save, p_gs, date, gametype
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("p1", "ace001", "NYA", "1", "value", "27", "5", "0", "1", "1", "2", "0", "8", "0", "1", "", "", "1", "20210705", "regular"),
+            ("p2", "ace001", "NYA", "1", "value", "24", "6", "1", "2", "2", "3", "0", "7", "0", "1", "", "", "1", "20220704", "regular"),
+            ("p3", "ace001", "NYA", "1", "value", "18", "7", "1", "3", "3", "4", "0", "5", "0", "", "1", "", "1", "20210706", "regular"),
+            ("p4", "ace002", "BOS", "1", "value", "27", "4", "0", "1", "1", "1", "0", "9", "0", "1", "", "", "1", "20210706", "regular"),
+            ("p5", "ace002", "BOS", "1", "value", "27", "5", "0", "2", "2", "2", "0", "6", "0", "1", "", "", "1", "20220705", "regular"),
+            ("p6", "ace003", "ATL", "1", "value", "21", "6", "0", "2", "2", "3", "0", "4", "0", "1", "", "", "1", "20210707", "regular"),
         ],
     )
     connection.commit()
@@ -133,3 +195,30 @@ def test_birthday_condition_respects_explicit_minimum_plate_appearances() -> Non
     assert snippet.payload["rows"][0]["player_name"] == "Delta Slugger"
     assert snippet.payload["rows"][0]["plate_appearances"] == 25
     assert "at least 20 PA" in snippet.summary
+
+
+def test_weekday_pitching_condition_breakdown_returns_top_pitcher_per_day() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(connection, "Which pitcher has the most wins on each day of the week")
+    connection.close()
+    assert snippet is not None
+    assert snippet.payload["analysis_type"] == "player_game_condition_leaderboard"
+    assert snippet.payload["role"] == "pitcher"
+    assert snippet.payload["breakdown_all_values"] is True
+    assert snippet.payload["rows"][0]["condition_value"] == "Monday"
+    assert snippet.payload["rows"][0]["player_name"] == "Monday Ace"
+    assert snippet.payload["rows"][0]["wins"] == 2
+    assert any(row["condition_value"] == "Tuesday" and row["player_name"] == "Tuesday Ace" for row in snippet.payload["rows"])
+
+
+def test_weekday_pitching_condition_supports_specific_weekday() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(connection, "Which pitcher has the most wins on Tuesdays?")
+    connection.close()
+    assert snippet is not None
+    assert snippet.payload["role"] == "pitcher"
+    assert snippet.payload["breakdown_all_values"] is False
+    assert snippet.payload["rows"][0]["player_name"] == "Tuesday Ace"
+    assert snippet.payload["rows"][0]["wins"] == 2

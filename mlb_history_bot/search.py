@@ -405,7 +405,11 @@ class BaseballResearchEngine:
             if team_history_snippet and team_split_history_snippet is None and retrosheet_streak_snippet is None and retrosheet_inning_record_snippet is None:
                 context.historical_evidence.append(team_history_snippet)
             if not (cohort_filter_requested and cohort_metric_snippet is None):
-                season_metric_snippet = self.season_metric_researcher.build_snippet(connection, question)
+                season_metric_snippet = (
+                    None
+                    if player_game_condition_snippet is not None
+                    else self.season_metric_researcher.build_snippet(connection, question)
+                )
                 if season_metric_snippet:
                     target_collection = (
                         context.live_evidence

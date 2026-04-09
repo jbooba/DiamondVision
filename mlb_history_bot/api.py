@@ -446,29 +446,59 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
         rows = payload.get("rows")
         metric_label = str(payload.get("metric") or "Metric")
         game_label = str(payload.get("condition_game_label") or "Games")
+        condition_value_label = str(payload.get("condition_value_label") or "")
+        role = str(payload.get("role") or "")
+        breakdown_all_values = bool(payload.get("breakdown_all_values"))
         if isinstance(rows, list):
-            return build_table_display(
+            columns = [
+                {"key": "rank", "label": "#", "align": "right"},
+            ]
+            if breakdown_all_values and condition_value_label:
+                columns.append({"key": "condition_value", "label": condition_value_label, "align": "left"})
+            columns.extend(
                 [
-                    {"key": "rank", "label": "#", "align": "right"},
                     {"key": "player_name", "label": "Player", "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
                     {"key": "condition_games", "label": game_label, "align": "right"},
-                    {"key": "plate_appearances", "label": "PA", "align": "right"},
-                    {"key": "at_bats", "label": "AB", "align": "right"},
-                    {"key": "avg", "label": "AVG", "align": "right"},
-                    {"key": "obp", "label": "OBP", "align": "right"},
-                    {"key": "slg", "label": "SLG", "align": "right"},
-                    {"key": "ops", "label": "OPS", "align": "right"},
-                    {"key": "hits", "label": "H", "align": "right"},
-                    {"key": "home_runs", "label": "HR", "align": "right"},
-                    {"key": "runs_batted_in", "label": "RBI", "align": "right"},
-                    {"key": "walks", "label": "BB", "align": "right"},
-                    {"key": "strikeouts", "label": "SO", "align": "right"},
+                ]
+            )
+            if role == "pitcher":
+                columns.extend(
+                    [
+                        {"key": "games_started", "label": "GS", "align": "right"},
+                        {"key": "innings", "label": "IP", "align": "right"},
+                        {"key": "wins", "label": "W", "align": "right"},
+                        {"key": "losses", "label": "L", "align": "right"},
+                        {"key": "saves", "label": "SV", "align": "right"},
+                        {"key": "era", "label": "ERA", "align": "right"},
+                        {"key": "whip", "label": "WHIP", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                    ]
+                )
+            else:
+                columns.extend(
+                    [
+                        {"key": "plate_appearances", "label": "PA", "align": "right"},
+                        {"key": "at_bats", "label": "AB", "align": "right"},
+                        {"key": "avg", "label": "AVG", "align": "right"},
+                        {"key": "obp", "label": "OBP", "align": "right"},
+                        {"key": "slg", "label": "SLG", "align": "right"},
+                        {"key": "ops", "label": "OPS", "align": "right"},
+                        {"key": "hits", "label": "H", "align": "right"},
+                        {"key": "home_runs", "label": "HR", "align": "right"},
+                        {"key": "runs_batted_in", "label": "RBI", "align": "right"},
+                        {"key": "walks", "label": "BB", "align": "right"},
+                        {"key": "strikeouts", "label": "SO", "align": "right"},
+                    ]
+                )
+            columns.extend(
+                [
                     {"key": "first_season", "label": "First", "align": "right"},
                     {"key": "last_season", "label": "Last", "align": "right"},
-                ],
-                rows,
+                ]
             )
+            return build_table_display(columns, rows)
 
     if analysis_type == "player_count_leaderboard":
         leaders = payload.get("leaders")
