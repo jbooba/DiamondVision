@@ -532,6 +532,28 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                 leaders,
             )
 
+    if analysis_type == "opponent_pitcher_cohort_leaderboard":
+        leaders = payload.get("leaders")
+        metric_label = str(payload.get("metric") or "Metric")
+        if isinstance(leaders, list):
+            return build_table_display(
+                [
+                    {"key": "rank", "label": "#", "align": "right"},
+                    {"key": "player_name", "label": "Player", "align": "left"},
+                    {"key": "metric_value", "label": metric_label, "align": "right"},
+                    {"key": "plate_appearances", "label": "PA", "align": "right"},
+                    {"key": "at_bats", "label": "AB", "align": "right"},
+                    {"key": "hits", "label": "H", "align": "right"},
+                    {"key": "home_runs", "label": "HR", "align": "right"},
+                    {"key": "walks", "label": "BB", "align": "right"},
+                    {"key": "strikeouts", "label": "SO", "align": "right"},
+                    {"key": "pitchers_faced", "label": "Pitchers", "align": "right"},
+                    {"key": "first_season", "label": "First", "align": "right"},
+                    {"key": "last_season", "label": "Last", "align": "right"},
+                ],
+                leaders,
+            )
+
     if analysis_type == "player_situational_leaderboard":
         leaders = payload.get("leaders")
         metric_label = str(payload.get("metric") or "Metric")
@@ -1169,6 +1191,9 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
     rows = payload.get("rows")
     if isinstance(rows, list) and rows and all(isinstance(row, dict) for row in rows):
         return build_generic_rows_display(snippet, rows)
+    leaders = payload.get("leaders")
+    if isinstance(leaders, list) and leaders and all(isinstance(row, dict) for row in leaders):
+        return build_generic_rows_display(snippet, leaders)
     return None
 
 

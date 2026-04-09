@@ -147,3 +147,57 @@ def test_build_snippet_display_creates_table_for_team_rankings() -> None:
     assert display["columns"][-1]["label"] == "xBA"
     assert display["rows"][0]["rank"] == "1"
     assert display["rows"][0]["team_name"] == "Athletics"
+
+
+def test_build_snippet_display_creates_table_for_opponent_pitcher_cohorts() -> None:
+    snippet = EvidenceSnippet(
+        source="Opponent Pitcher Cohorts",
+        title="Cy Young Award winners OPS leaderboard",
+        citation="Retrosheet plays.csv aggregated by hitter against opponent-pitcher award cohorts",
+        summary="Barry Bonds leads the board.",
+        payload={
+            "analysis_type": "opponent_pitcher_cohort_leaderboard",
+            "metric": "OPS",
+            "cohort_label": "Cy Young Award winners",
+            "leaders": [
+                {
+                    "player_name": "Barry Bonds",
+                    "metric_value": 0.973,
+                    "plate_appearances": 1006,
+                    "at_bats": 820,
+                    "hits": 260,
+                    "home_runs": 51,
+                    "walks": 166,
+                    "strikeouts": 98,
+                    "pitchers_faced": 28,
+                    "first_season": 1986,
+                    "last_season": 2007,
+                }
+            ],
+        },
+    )
+    display = build_snippet_display(snippet)
+    assert display is not None
+    assert display["kind"] == "table"
+    assert display["columns"][2]["label"] == "OPS"
+    assert display["rows"][0]["player_name"] == "Barry Bonds"
+    assert display["rows"][0]["plate_appearances"] == "1006"
+
+
+def test_build_snippet_display_falls_back_to_generic_leaders_table() -> None:
+    snippet = EvidenceSnippet(
+        source="Generic Leaderboard",
+        title="Test leaderboard",
+        citation="Synthetic",
+        summary="Synthetic",
+        payload={
+            "analysis_type": "unhandled_leaderboard_type",
+            "leaders": [
+                {"player_name": "Test Player", "metric_value": 1.234, "plate_appearances": 42}
+            ],
+        },
+    )
+    display = build_snippet_display(snippet)
+    assert display is not None
+    assert display["kind"] == "table"
+    assert display["rows"][0]["player_name"] == "Test Player"
