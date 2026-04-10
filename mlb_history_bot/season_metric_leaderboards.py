@@ -364,12 +364,61 @@ STATCAST_HISTORY_BASE_LABELS = {
     "3b": ("third base", "3rd base"),
     "home": ("home plate",),
 }
+STATCAST_HISTORY_TOKEN_HUMANIZATION = {
+    "interf": "interference",
+    "indiff": "indifference",
+    "gnd": "ground",
+    "pct": "percent",
+}
+STATCAST_HISTORY_PHRASE_HUMANIZATION = {
+    "starting p": "starting pitcher",
+}
 STATCAST_HISTORY_EXACT_ALIAS_EXPANSIONS = {
+    "ab": ("at bat", "at bats", "at-bat", "at-bats"),
+    "pa": ("plate appearance", "plate appearances"),
+    "hit": ("hits",),
+    "single": ("singles", "1b"),
+    "double": ("doubles", "2b"),
+    "triple": ("triples", "3b"),
+    "home run": ("home runs", "homer", "homers", "homerun", "homeruns", "hr"),
+    "strikeout": ("strikeouts", "strike out", "strike outs", "so", "ks"),
+    "walk": ("walks", "base on balls", "bases on balls", "bb"),
+    "run": ("runs",),
+    "rbi": ("runs batted in", "rbis"),
+    "lob": ("left on base", "left on bases", "left-on-base"),
+    "save": ("saves", "sv"),
+    "blown save": ("blown saves",),
+    "win": ("wins", "w"),
+    "loss": ("losses", "l"),
+    "quality start": ("quality starts", "qs"),
+    "complete game": ("complete games", "cg"),
+    "shutout": ("shutouts", "sho"),
+    "wild pitch": ("wild pitches", "wp"),
+    "balk": ("balks",),
+    "hold": ("holds",),
+    "game": ("games", "appearances"),
+    "starting pitcher": ("starts", "games started", "gs"),
+    "hit by pitch": ("hit by pitches", "hbp"),
+    "intent walk": ("intentional walk", "intentional walks", "ibb"),
+    "total bases": ("tb",),
+    "pitch count": ("pitches", "total pitches", "pitch total"),
+    "batted ball": ("batted balls", "batted ball events", "bbe", "bbes"),
+    "barrel": ("barrels",),
+    "called strike": ("called strikes", "taken called strikes"),
+    "called ball": ("called balls", "taken balls"),
+    "reached on error": ("reached on errors", "reach on error", "roe"),
+    "total stolen base": ("stolen base", "stolen bases", "sb"),
+    "total caught stealing": ("caught stealing", "caught stealings", "cs"),
+    "stolen base percent": ("stolen base percentage", "stolen base rate", "sb%"),
+    "player age": ("age",),
     "called strike": ("called strikes",),
     "called ball": ("called balls",),
     "sac bunt": ("sac bunts", "sacrifice bunt", "sacrifice bunts"),
     "sac fly": ("sac flies", "sacrifice fly", "sacrifice flies"),
     "total sacrifices": ("total sacrifice", "total sacs", "sacrifices", "sacrifices total"),
+    "xba diff": ("xba difference",),
+    "xslg diff": ("xslg difference",),
+    "woba diff": ("woba difference",),
 }
 
 
@@ -982,6 +1031,10 @@ def humanize_statcast_history_phrase(value: str) -> str:
     normalized = value.lower().replace("_", " ").replace("-", " ").strip()
     for source, replacement in STATCAST_HISTORY_COMPOUND_TERMS.items():
         normalized = normalized.replace(source, replacement)
+    tokens = [STATCAST_HISTORY_TOKEN_HUMANIZATION.get(token, token) for token in normalized.split()]
+    normalized = " ".join(tokens)
+    for source, replacement in STATCAST_HISTORY_PHRASE_HUMANIZATION.items():
+        normalized = normalized.replace(source, replacement)
     return re.sub(r"\s+", " ", normalized).strip()
 
 
@@ -995,6 +1048,10 @@ def expand_statcast_history_phrase_aliases(value: str) -> set[str]:
         last = tokens[-1]
         if last in STATCAST_HISTORY_LAST_TOKEN_VARIANTS:
             variants.add(" ".join([*tokens[:-1], STATCAST_HISTORY_LAST_TOKEN_VARIANTS[last]]))
+        if len(tokens) >= 2 and tokens[-2:] == ["called", "strike"]:
+            variants.add("called strikes taken")
+        if len(tokens) >= 2 and tokens[-2:] == ["called", "strikes"]:
+            variants.add("called strikes taken")
         if len(tokens) >= 2 and tokens[0] == "sac":
             variants.add(" ".join(["sacrifice", *tokens[1:]]))
         if len(tokens) >= 2 and tokens[0] == "called" and tokens[1] in {"strike", "strikes", "ball", "balls"}:
@@ -1006,6 +1063,10 @@ def expand_statcast_history_phrase_aliases(value: str) -> set[str]:
             for label in STATCAST_HISTORY_BASE_LABELS[base_token]:
                 variants.add(f"{tokens[0]} {label}")
                 variants.add(f"{tokens[0]} at {label}")
+        if len(tokens) >= 2 and tokens[0] == "stolen" and tokens[1] == "base":
+            variants.add("stolen bases")
+        if len(tokens) >= 2 and tokens[0] == "caught" and tokens[1] == "stealing":
+            variants.add("caught stealings")
         if len(tokens) >= 2 and tokens[0] == "total" and tokens[1] == "sacrifices":
             variants.update({"total sacrifice", "total sacs", "sacrifices", "sacrifices total"})
     variants.update(STATCAST_HISTORY_EXACT_ALIAS_EXPANSIONS.get(base, ()))
