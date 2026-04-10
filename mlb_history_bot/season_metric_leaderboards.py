@@ -332,6 +332,45 @@ STATCAST_HISTORY_PITCH_LABELS = {
     "breaking": "breaking ball",
     "offspeed": "offspeed pitch",
 }
+STATCAST_HISTORY_COMPOUND_TERMS = {
+    "linedrives": "line drives",
+    "groundballs": "ground balls",
+    "flyballs": "fly balls",
+    "popups": "pop ups",
+    "solidcontact": "solid contact",
+    "flareburner": "flare burner",
+    "poorlytopped": "poorly topped",
+    "poorlyunder": "poorly under",
+}
+STATCAST_HISTORY_LAST_TOKEN_VARIANTS = {
+    "strike": "strikes",
+    "strikes": "strike",
+    "ball": "balls",
+    "balls": "ball",
+    "drive": "drives",
+    "drives": "drive",
+    "bunt": "bunts",
+    "bunts": "bunt",
+    "fly": "flies",
+    "flies": "fly",
+    "sacrifice": "sacrifices",
+    "sacrifices": "sacrifice",
+    "pickoff": "pickoffs",
+    "pickoffs": "pickoff",
+}
+STATCAST_HISTORY_BASE_LABELS = {
+    "1b": ("first base", "1st base"),
+    "2b": ("second base", "2nd base"),
+    "3b": ("third base", "3rd base"),
+    "home": ("home plate",),
+}
+STATCAST_HISTORY_EXACT_ALIAS_EXPANSIONS = {
+    "called strike": ("called strikes",),
+    "called ball": ("called balls",),
+    "sac bunt": ("sac bunts", "sacrifice bunt", "sacrifice bunts"),
+    "sac fly": ("sac flies", "sacrifice fly", "sacrifice flies"),
+    "total sacrifices": ("total sacrifice", "total sacs", "sacrifices", "sacrifices total"),
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -939,6 +978,40 @@ def build_statcast_history_metric_spec(*, column: str, table_name: str, role: st
     )
 
 
+def humanize_statcast_history_phrase(value: str) -> str:
+    normalized = value.lower().replace("_", " ").replace("-", " ").strip()
+    for source, replacement in STATCAST_HISTORY_COMPOUND_TERMS.items():
+        normalized = normalized.replace(source, replacement)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def expand_statcast_history_phrase_aliases(value: str) -> set[str]:
+    base = humanize_statcast_history_phrase(value)
+    if not base:
+        return set()
+    variants = {base}
+    tokens = base.split()
+    if tokens:
+        last = tokens[-1]
+        if last in STATCAST_HISTORY_LAST_TOKEN_VARIANTS:
+            variants.add(" ".join([*tokens[:-1], STATCAST_HISTORY_LAST_TOKEN_VARIANTS[last]]))
+        if len(tokens) >= 2 and tokens[0] == "sac":
+            variants.add(" ".join(["sacrifice", *tokens[1:]]))
+        if len(tokens) >= 2 and tokens[0] == "called" and tokens[1] in {"strike", "strikes", "ball", "balls"}:
+            singular = tokens[1].rstrip("s")
+            variants.add(f"called {singular}")
+            variants.add(f"called {singular}s")
+        if len(tokens) >= 2 and tokens[0].startswith("pickoff") and tokens[1] in STATCAST_HISTORY_BASE_LABELS:
+            base_token = tokens[1]
+            for label in STATCAST_HISTORY_BASE_LABELS[base_token]:
+                variants.add(f"{tokens[0]} {label}")
+                variants.add(f"{tokens[0]} at {label}")
+        if len(tokens) >= 2 and tokens[0] == "total" and tokens[1] == "sacrifices":
+            variants.update({"total sacrifice", "total sacs", "sacrifices", "sacrifices total"})
+    variants.update(STATCAST_HISTORY_EXACT_ALIAS_EXPANSIONS.get(base, ()))
+    return {variant.strip().lower() for variant in variants if variant.strip()}
+
+
 def build_statcast_history_aliases(column: str, role: str) -> set[str]:
     aliases = {
         column,
@@ -974,7 +1047,11 @@ def build_statcast_history_aliases(column: str, role: str) -> set[str]:
         aliases.update({f"{base} speed range", f"{base} velocity range"})
     if role == "pitcher" and "walk" in stripped and "intent" not in stripped:
         aliases.add(stripped.replace("walk", "walks allowed").replace("_", " "))
-    return {alias.strip().lower() for alias in aliases if alias.strip()}
+    expanded: set[str] = set()
+    for alias in aliases:
+        if alias.strip():
+            expanded.update(expand_statcast_history_phrase_aliases(alias))
+    return expanded
 
 
 def parse_statcast_history_pitch_metric(column: str) -> set[str] | None:
@@ -1013,7 +1090,7 @@ def format_statcast_history_label(column: str) -> str:
         if base.startswith(prefix):
             base = base[len(prefix) :]
             break
-    return base.replace("_", " ").title()
+    return humanize_statcast_history_phrase(base).title()
 
 
 def infer_statcast_history_aggregate_mode(column: str, role: str) -> str:

@@ -208,7 +208,11 @@ def build_test_connection() -> sqlite3.Connection:
             swords TEXT,
             pitch_count TEXT,
             batted_ball TEXT,
-            barrel TEXT
+            barrel TEXT,
+            linedrives TEXT,
+            b_called_strike TEXT,
+            b_sac_bunt TEXT,
+            b_total_sacrifices TEXT
         )
         """
     )
@@ -216,14 +220,15 @@ def build_test_connection() -> sqlite3.Connection:
         """
         INSERT INTO statcast_history_batter_seasons(
             last_name_first_name, player_id, year, player_age, pa, ab, hit, home_run, walk, strikeout,
-            batting_avg, on_base_plus_slg, oz_swing_percent, exit_velocity_avg, attack_angle, swords, pitch_count, batted_ball, barrel
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            batting_avg, on_base_plus_slg, oz_swing_percent, exit_velocity_avg, attack_angle, swords, pitch_count, batted_ball, barrel,
+            linedrives, b_called_strike, b_sac_bunt, b_total_sacrifices
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "29.5", "93.1", "12.5", "45", "2400", "380", "28"),
-            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "30.0", "92.8", "13.0", "49", "2450", "395", "30"),
-            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "41.5", "91.0", "10.4", "33", "2200", "340", "19"),
-            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "40.0", "90.8", "10.1", "31", "2250", "335", "18"),
+            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "29.5", "93.1", "12.5", "45", "2400", "380", "28", "92", "210", "4", "6"),
+            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "30.0", "92.8", "13.0", "49", "2450", "395", "30", "95", "220", "3", "5"),
+            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "41.5", "91.0", "10.4", "33", "2200", "340", "19", "88", "240", "7", "9"),
+            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "40.0", "90.8", "10.1", "31", "2250", "335", "18", "85", "245", "8", "10"),
         ],
     )
     con.execute(
@@ -244,7 +249,9 @@ def build_test_connection() -> sqlite3.Connection:
             n_ff_formatted TEXT,
             ff_avg_speed TEXT,
             fastball_avg_speed TEXT,
-            p_run TEXT
+            p_run TEXT,
+            p_called_strike TEXT,
+            linedrives TEXT
         )
         """
     )
@@ -252,14 +259,14 @@ def build_test_connection() -> sqlite3.Connection:
         """
         INSERT INTO statcast_history_pitcher_seasons(
             last_name_first_name, player_id, year, player_age, p_game, p_starting_p, p_win, p_loss, p_era,
-            strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run, p_called_strike, linedrives
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "210", "45", "2800", "920", "97.5", "97.1", "72"),
-            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "198", "51", "2700", "880", "97.2", "96.9", "76"),
-            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.80", "180", "60", "2600", "790", "96.1", "95.8", "85"),
-            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "172", "58", "2500", "760", "95.9", "95.5", "88"),
+            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "210", "45", "2800", "920", "97.5", "97.1", "72", "610", "102"),
+            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "198", "51", "2700", "880", "97.2", "96.9", "76", "590", "98"),
+            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.80", "180", "60", "2600", "790", "96.1", "95.8", "85", "640", "118"),
+            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "172", "58", "2500", "760", "95.9", "95.5", "88", "620", "114"),
         ],
     )
     con.commit()
@@ -353,6 +360,45 @@ def test_statcast_history_pitcher_metric_leaderboard_builds() -> None:
     assert snippet.payload["source_family"] == "statcast_history"
     assert snippet.payload["rows"][0]["player_name"] == "Paula Pitcher"
     assert round(snippet.payload["rows"][0]["metric_value"], 1) == 97.5
+    con.close()
+
+
+def test_statcast_history_batter_count_metric_aliases_build() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    line_drive_snippet = researcher.build_snippet(con, "which hitter had the most line drives in 2021?")
+    assert line_drive_snippet is not None
+    assert line_drive_snippet.payload["source_family"] == "statcast_history"
+    assert line_drive_snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
+    assert line_drive_snippet.payload["rows"][0]["metric_value"] == 92
+
+    called_strike_snippet = researcher.build_snippet(con, "which hitter took the most called strikes in 2021?")
+    assert called_strike_snippet is not None
+    assert called_strike_snippet.payload["source_family"] == "statcast_history"
+    assert called_strike_snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
+    assert called_strike_snippet.payload["rows"][0]["metric_value"] == 240
+    con.close()
+
+
+def test_statcast_history_pitcher_cross_role_count_aliases_build() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which pitcher threw the most called strikes in 2021?")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "statcast_history"
+    assert snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert snippet.payload["rows"][0]["metric_value"] == 640
+    con.close()
+
+
+def test_statcast_history_sacrifice_aliases_build() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which hitter had the most sacrifices in 2022?")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "statcast_history"
+    assert snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
+    assert snippet.payload["rows"][0]["metric_value"] == 10
     con.close()
 
 

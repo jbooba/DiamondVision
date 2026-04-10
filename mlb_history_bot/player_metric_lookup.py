@@ -496,7 +496,23 @@ def resolve_history_spec_for_role(connection, spec: SeasonMetricSpec, role: str)
     table_name = STATCAST_HISTORY_PITCHER_TABLE if role == "pitcher" else STATCAST_HISTORY_BATTER_TABLE
     if not table_exists(connection, table_name):
         return None
-    candidate_column = resolve_column(connection, table_name, (spec.dynamic_value_column or spec.key, spec.key))
+    raw_column = str(spec.dynamic_value_column or spec.key or "").strip().lower()
+    stripped_column = raw_column
+    for prefix in ("b_", "p_", "r_"):
+        if stripped_column.startswith(prefix):
+            stripped_column = stripped_column[len(prefix) :]
+            break
+    role_prefix = "p_" if role == "pitcher" else "b_"
+    candidate_column = resolve_column(
+        connection,
+        table_name,
+        (
+            raw_column,
+            stripped_column,
+            f"{role_prefix}{stripped_column}" if stripped_column else "",
+            spec.key,
+        ),
+    )
     if candidate_column is None:
         return None
     return build_statcast_history_metric_spec(column=candidate_column, table_name=table_name, role=role)
