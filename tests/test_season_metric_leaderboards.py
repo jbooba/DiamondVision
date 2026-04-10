@@ -212,7 +212,14 @@ def build_test_connection() -> sqlite3.Connection:
             linedrives TEXT,
             b_called_strike TEXT,
             b_sac_bunt TEXT,
-            b_total_sacrifices TEXT
+            b_total_sacrifices TEXT,
+            b_ab_scoring TEXT,
+            b_reached_on_int TEXT,
+            exchange_2b_3b_sba TEXT,
+            maxeff_arm_2b_3b_sba TEXT,
+            pop_2b_sba TEXT,
+            pop_2b_sba_count TEXT,
+            n_fieldout_5stars TEXT
         )
         """
     )
@@ -221,14 +228,15 @@ def build_test_connection() -> sqlite3.Connection:
         INSERT INTO statcast_history_batter_seasons(
             last_name_first_name, player_id, year, player_age, pa, ab, hit, home_run, walk, strikeout,
             batting_avg, on_base_plus_slg, oz_swing_percent, exit_velocity_avg, attack_angle, swords, pitch_count, batted_ball, barrel,
-            linedrives, b_called_strike, b_sac_bunt, b_total_sacrifices
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            linedrives, b_called_strike, b_sac_bunt, b_total_sacrifices, b_ab_scoring, b_reached_on_int,
+            exchange_2b_3b_sba, maxeff_arm_2b_3b_sba, pop_2b_sba, pop_2b_sba_count, n_fieldout_5stars
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "29.5", "93.1", "12.5", "45", "2400", "380", "28", "92", "210", "4", "6"),
-            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "30.0", "92.8", "13.0", "49", "2450", "395", "30", "95", "220", "3", "5"),
-            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "41.5", "91.0", "10.4", "33", "2200", "340", "19", "88", "240", "7", "9"),
-            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "40.0", "90.8", "10.1", "31", "2250", "335", "18", "85", "245", "8", "10"),
+            ("Alpha, Alex", "100", "2021", "29", "600", "550", "165", "30", "70", "120", ".300", ".880", "29.5", "93.1", "12.5", "45", "2400", "380", "28", "92", "210", "4", "6", "110", "1", "0.71", "84.2", "1.95", "35", "7"),
+            ("Alpha, Alex", "100", "2022", "30", "620", "565", "170", "33", "68", "118", ".301", ".901", "30.0", "92.8", "13.0", "49", "2450", "395", "30", "95", "220", "3", "5", "112", "0", "0.70", "84.8", "1.94", "34", "8"),
+            ("Bravo, Ben", "200", "2021", "28", "540", "500", "130", "18", "45", "150", ".260", ".760", "41.5", "91.0", "10.4", "33", "2200", "340", "19", "88", "240", "7", "9", "118", "2", "0.66", "82.0", "2.02", "42", "5"),
+            ("Bravo, Ben", "200", "2022", "29", "560", "515", "128", "17", "48", "160", ".249", ".744", "40.0", "90.8", "10.1", "31", "2250", "335", "18", "85", "245", "8", "10", "121", "3", "0.67", "82.4", "2.01", "41", "4"),
         ],
     )
     con.execute(
@@ -251,7 +259,13 @@ def build_test_connection() -> sqlite3.Connection:
             fastball_avg_speed TEXT,
             p_run TEXT,
             p_called_strike TEXT,
-            linedrives TEXT
+            linedrives TEXT,
+            p_inh_runner TEXT,
+            p_beq_runner_scored TEXT,
+            p_ab_scoring TEXT,
+            p_hit_scoring TEXT,
+            p_pickoff_attempt_1b TEXT,
+            p_pickoff_error_1b TEXT
         )
         """
     )
@@ -259,14 +273,15 @@ def build_test_connection() -> sqlite3.Connection:
         """
         INSERT INTO statcast_history_pitcher_seasons(
             last_name_first_name, player_id, year, player_age, p_game, p_starting_p, p_win, p_loss, p_era,
-            strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run, p_called_strike, linedrives
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run, p_called_strike, linedrives,
+            p_inh_runner, p_beq_runner_scored, p_ab_scoring, p_hit_scoring, p_pickoff_attempt_1b, p_pickoff_error_1b
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "210", "45", "2800", "920", "97.5", "97.1", "72", "610", "102"),
-            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "198", "51", "2700", "880", "97.2", "96.9", "76", "590", "98"),
-            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.80", "180", "60", "2600", "790", "96.1", "95.8", "85", "640", "118"),
-            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "172", "58", "2500", "760", "95.9", "95.5", "88", "620", "114"),
+            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "210", "45", "2800", "920", "97.5", "97.1", "72", "610", "102", "18", "6", "165", "42", "9", "1"),
+            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "198", "51", "2700", "880", "97.2", "96.9", "76", "590", "98", "17", "5", "160", "39", "8", "0"),
+            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.80", "180", "60", "2600", "790", "96.1", "95.8", "85", "640", "118", "24", "9", "184", "55", "14", "3"),
+            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "172", "58", "2500", "760", "95.9", "95.5", "88", "620", "114", "22", "8", "176", "51", "13", "2"),
         ],
     )
     con.commit()
@@ -399,6 +414,63 @@ def test_statcast_history_sacrifice_aliases_build() -> None:
     assert snippet.payload["source_family"] == "statcast_history"
     assert snippet.payload["rows"][0]["player_name"] == "Ben Bravo"
     assert snippet.payload["rows"][0]["metric_value"] == 10
+    con.close()
+
+
+def test_statcast_history_catcher_pop_time_and_arm_strength_aliases_build() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    pop_time_snippet = researcher.build_snippet(
+        con,
+        "which catcher had the lowest pop time to second on stolen base attempts in 2021?",
+    )
+    assert pop_time_snippet is not None
+    assert pop_time_snippet.payload["source_family"] == "statcast_history"
+    assert pop_time_snippet.payload["rows"][0]["player_name"] == "Alpha, Alex" or pop_time_snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
+    assert round(pop_time_snippet.payload["rows"][0]["metric_value"], 2) == 1.95
+
+    arm_snippet = researcher.build_snippet(con, "which catcher had the highest arm strength in 2021?")
+    assert arm_snippet is not None
+    assert arm_snippet.payload["source_family"] == "statcast_history"
+    assert arm_snippet.payload["rows"][0]["player_name"] == "Alex Alpha"
+    assert round(arm_snippet.payload["rows"][0]["metric_value"], 1) == 84.2
+    con.close()
+
+
+def test_statcast_history_inherited_runner_and_risp_pitching_aliases_build() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    inherited_snippet = researcher.build_snippet(con, "which pitcher had the most inherited runners in 2021?")
+    assert inherited_snippet is not None
+    assert inherited_snippet.payload["source_family"] == "statcast_history"
+    assert inherited_snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert inherited_snippet.payload["rows"][0]["metric_value"] == 24
+
+    hits_scoring_snippet = researcher.build_snippet(
+        con,
+        "which pitcher allowed the most hits with runners in scoring position in 2021?",
+    )
+    assert hits_scoring_snippet is not None
+    assert hits_scoring_snippet.payload["source_family"] == "statcast_history"
+    assert hits_scoring_snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert hits_scoring_snippet.payload["rows"][0]["metric_value"] == 55
+    con.close()
+
+
+def test_statcast_history_pickoff_attempt_and_error_aliases_stay_distinct() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    attempts = researcher.build_snippet(con, "which pitcher had the most pickoff attempts at first base in 2021?")
+    assert attempts is not None
+    assert attempts.payload["source_family"] == "statcast_history"
+    assert attempts.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert attempts.payload["rows"][0]["metric_value"] == 14
+
+    errors = researcher.build_snippet(con, "which pitcher had the most pickoff errors at first base in 2021?")
+    assert errors is not None
+    assert errors.payload["source_family"] == "statcast_history"
+    assert errors.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert errors.payload["rows"][0]["metric_value"] == 3
     con.close()
 
 

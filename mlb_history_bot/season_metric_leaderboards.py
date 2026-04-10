@@ -190,6 +190,8 @@ HITTING_ROLE_HINT_WORDS = (
     " hitters ",
     " batter ",
     " batters ",
+    " catcher ",
+    " catchers ",
     " batting ",
     " offense ",
     " offensive ",
@@ -359,9 +361,9 @@ STATCAST_HISTORY_LAST_TOKEN_VARIANTS = {
     "pickoffs": "pickoff",
 }
 STATCAST_HISTORY_BASE_LABELS = {
-    "1b": ("first base", "1st base"),
-    "2b": ("second base", "2nd base"),
-    "3b": ("third base", "3rd base"),
+    "1b": ("first", "first base", "1st", "1st base"),
+    "2b": ("second", "second base", "2nd", "2nd base"),
+    "3b": ("third", "third base", "3rd", "3rd base"),
     "home": ("home plate",),
 }
 STATCAST_HISTORY_TOKEN_HUMANIZATION = {
@@ -661,11 +663,17 @@ class SeasonMetricLeaderboardResearcher:
 def parse_season_metric_query(connection, settings: Settings, catalog: MetricCatalog, question: str) -> SeasonMetricQuery | None:
     lowered = f" {question.lower()} "
     metric_search_text = normalize_metric_search_text(strip_qualifier_clauses(lowered))
-    metric = find_season_metric(metric_search_text)
+    season_metric_match = find_scored_season_metric(metric_search_text)
+    history_metric_match = find_scored_statcast_history_metric(connection, metric_search_text)
+    metric = None
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
-    if metric is None:
-        metric = find_statcast_history_metric(connection, metric_search_text)
+    if history_metric_match is not None and (
+        season_metric_match is None or history_metric_match[0] > season_metric_match[0]
+    ):
+        metric = history_metric_match[1]
+    elif season_metric_match is not None:
+        metric = season_metric_match[1]
     if metric is None:
         provider_metric = find_provider_metric(metric_search_text, catalog)
         if provider_metric is not None:
@@ -753,6 +761,11 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
 
 
 def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
+    best_match = find_scored_season_metric(lowered_question)
+    return best_match[1] if best_match else None
+
+
+def find_scored_season_metric(lowered_question: str) -> tuple[int, SeasonMetricSpec] | None:
     best_match: tuple[int, SeasonMetricSpec] | None = None
     for metric in SEASON_METRICS:
         for alias in metric.aliases:
@@ -766,7 +779,7 @@ def find_season_metric(lowered_question: str) -> SeasonMetricSpec | None:
             score += metric_match_bonus(metric, lowered_question)
             if best_match is None or score > best_match[0]:
                 best_match = (score, metric)
-    return best_match[1] if best_match else None
+    return best_match
 
 
 def metric_alias_match_score(alias_lower: str, pattern: str, lowered_question: str) -> int | None:
@@ -787,6 +800,8 @@ def normalize_metric_search_text(lowered_question: str) -> str:
     normalized = lowered_question
     for pattern, replacement in METRIC_NORMALIZATION_PATTERNS:
         normalized = pattern.sub(f" {replacement} ", normalized)
+    normalized = re.sub(r"\bthe\s+(most|least|fewest|highest|lowest)\b", " ", normalized)
+    normalized = re.sub(r"\b(most|least|fewest|highest|lowest)\b", " ", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
 
 
@@ -974,6 +989,11 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
 
 
 def find_statcast_history_metric(connection, lowered_question: str) -> SeasonMetricSpec | None:
+    best_match = find_scored_statcast_history_metric(connection, lowered_question)
+    return best_match[1] if best_match else None
+
+
+def find_scored_statcast_history_metric(connection, lowered_question: str) -> tuple[int, SeasonMetricSpec] | None:
     best_match: tuple[int, SeasonMetricSpec] | None = None
     for config in STATCAST_HISTORY_TABLE_CONFIG:
         table_name = str(config["table_name"])
@@ -995,7 +1015,7 @@ def find_statcast_history_metric(connection, lowered_question: str) -> SeasonMet
                 score += metric_match_bonus(spec, lowered_question)
                 if best_match is None or score > best_match[0]:
                     best_match = (score, spec)
-    return best_match[1] if best_match else None
+    return best_match
 
 
 def build_statcast_history_metric_spec(*, column: str, table_name: str, role: str) -> SeasonMetricSpec | None:
@@ -1073,6 +1093,142 @@ def expand_statcast_history_phrase_aliases(value: str) -> set[str]:
     return {variant.strip().lower() for variant in variants if variant.strip()}
 
 
+def build_statcast_history_special_aliases(column: str) -> set[str]:
+    aliases: set[str] = set()
+    pop_match = re.fullmatch(r"pop_(2b|3b)_(sba_count|sba|sb|cs)", column)
+    if pop_match:
+        base_code, suffix = pop_match.groups()
+        base_labels = STATCAST_HISTORY_BASE_LABELS[base_code]
+        outcome_aliases = {
+            "sba_count": ("stolen base attempt count", "steal attempt count", "attempt count"),
+            "sba": ("stolen base attempts", "steal attempts", "all attempts"),
+            "sb": ("stolen bases", "successful steals"),
+            "cs": ("caught stealing", "caught stealings"),
+        }
+        for base_label in base_labels:
+            if suffix == "sba_count":
+                aliases.update(
+                    {
+                        f"pop time {base_label} stolen base attempts count",
+                        f"pop time to {base_label} on stolen base attempts count",
+                        f"pop time to {base_label} stolen base attempts count",
+                        f"pop time {base_label} all count",
+                        f"catcher pop time to {base_label} on stolen base attempts count",
+                    }
+                )
+            else:
+                for outcome in outcome_aliases[suffix]:
+                    aliases.update(
+                        {
+                            f"pop time {base_label} {outcome}",
+                            f"pop time to {base_label} {outcome}",
+                            f"pop time {base_label} on {outcome}",
+                            f"pop time to {base_label} on {outcome}",
+                            f"catcher pop time {base_label} {outcome}",
+                            f"catcher pop time to {base_label} {outcome}",
+                            f"catcher pop time to {base_label} on {outcome}",
+                        }
+                    )
+                if suffix == "sba":
+                    aliases.update(
+                        {
+                            f"pop time {base_label} all",
+                            f"pop time to {base_label} all",
+                            f"pop time {base_label}",
+                            f"catcher pop time {base_label}",
+                            f"catcher pop time to {base_label}",
+                        }
+                    )
+        return aliases
+    if column == "exchange_2b_3b_sba":
+        return {
+            "exchange",
+            "exchange time",
+            "catch to throw exchange",
+            "exchange time on stolen base attempts",
+            "exchange time on steal attempts",
+            "catcher exchange time",
+            "catch to throw time",
+        }
+    if column == "maxeff_arm_2b_3b_sba":
+        return {
+            "arm strength",
+            "max arm strength",
+            "max effort arm strength",
+            "highest arm strength on stolen base attempts",
+            "catcher arm strength",
+            "max throw velocity",
+            "catcher throw velocity",
+        }
+    if column in {"inh_runner", "inh_runner_scored", "beq_runner", "beq_runner_scored"}:
+        mapping = {
+            "inh_runner": {"inherited runner", "inherited runners"},
+            "inh_runner_scored": {"inherited runners scored", "inherited runner scored"},
+            "beq_runner": {"bequeathed runner", "bequeathed runners"},
+            "beq_runner_scored": {"bequeathed runners scored", "bequeathed runner scored"},
+        }
+        return mapping[column]
+    if column == "ab_scoring":
+        return {
+            "at bats with runners in scoring position",
+            "at bats with a runner in scoring position",
+            "at bats with risp",
+            "ab with runners in scoring position",
+            "ab with risp",
+            "scoring position at bats",
+            "runners in scoring position at bats",
+        }
+    if column == "hit_scoring":
+        return {
+            "hits allowed with runners in scoring position",
+            "hits allowed with a runner in scoring position",
+            "hits allowed with risp",
+            "hits with runners in scoring position allowed",
+            "hits allowed scoring position",
+            "allowed hits with runners in scoring position",
+            "allowed hits with a runner in scoring position",
+            "allowed hits with risp",
+        }
+    if column == "reached_on_int":
+        return {"reached on interference", "reach on interference"}
+    if column == "defensive_indiff":
+        return {"defensive indifference"}
+    if column == "n_fieldout_5stars":
+        return {
+            "5 star field outs",
+            "5-star field outs",
+            "5 star catches",
+            "5-star catches",
+            "5 star plays",
+            "5-star plays",
+            "5 star fielding plays",
+            "5-star fielding plays",
+        }
+    if column.startswith("n_opp_") and column.endswith("stars"):
+        star_count = column.removeprefix("n_opp_").removesuffix("stars")
+        return {
+            f"{star_count} star opportunities",
+            f"{star_count}-star opportunities",
+        }
+    pickoff_match = re.fullmatch(r"(?:p_)?pickoff_(attempt|error)_(1b|2b|3b)", column)
+    if pickoff_match:
+        kind, base_code = pickoff_match.groups()
+        aliases_for_kind = {
+            "attempt": {"pickoff attempt", "pickoff attempts"},
+            "error": {"pickoff error", "pickoff errors"},
+        }[kind]
+        for base_label in STATCAST_HISTORY_BASE_LABELS[base_code]:
+            for alias in aliases_for_kind:
+                aliases.add(f"{alias} {base_label}")
+                aliases.add(f"{alias} at {base_label}")
+        return aliases
+    if column in {"p_total_pickoff_attempt", "p_total_pickoff_error"}:
+        if column.endswith("_attempt"):
+            return {"total pickoff attempts", "pickoff attempts total"}
+        return {"total pickoff errors", "pickoff errors total"}
+    return set()
+
+
 def build_statcast_history_aliases(column: str, role: str) -> set[str]:
     aliases = {
         column,
@@ -1108,6 +1264,7 @@ def build_statcast_history_aliases(column: str, role: str) -> set[str]:
         aliases.update({f"{base} speed range", f"{base} velocity range"})
     if role == "pitcher" and "walk" in stripped and "intent" not in stripped:
         aliases.add(stripped.replace("walk", "walks allowed").replace("_", " "))
+    aliases.update(build_statcast_history_special_aliases(stripped))
     expanded: set[str] = set()
     for alias in aliases:
         if alias.strip():
@@ -1197,6 +1354,14 @@ def infer_statcast_history_sample_basis(column: str, role: str) -> str | None:
     normalized = column.lower()
     if normalized == "player_age":
         return None
+    if normalized in {"pop_2b_sba", "pop_2b_sb", "pop_2b_cs", "pop_2b_sba_count"}:
+        return "pop_2b_sba_count"
+    if normalized in {"pop_3b_sba", "pop_3b_sb", "pop_3b_cs", "pop_3b_sba_count"}:
+        return "pop_3b_sba_count"
+    if normalized == "b_ab_scoring":
+        return "b_ab_scoring"
+    if normalized in {"p_ab_scoring", "p_hit_scoring"}:
+        return "p_ab_scoring"
     if normalized.startswith("n_") and normalized.endswith("_formatted"):
         return normalized
     for prefix in tuple(STATCAST_HISTORY_PITCH_LABELS):
@@ -1231,8 +1396,10 @@ def infer_statcast_history_min_sample_size(sample_basis: str | None, aggregate_m
 
 def infer_statcast_history_higher_is_better(column: str, role: str) -> bool:
     normalized = column.lower()
-    negative_tokens = {"loss", "blown_save", "caught_stealing", "gnd_into_dp", "gnd_into_tp", "missed_bunt"}
+    negative_tokens = {"loss", "blown_save", "caught_stealing", "gnd_into_dp", "gnd_into_tp", "missed_bunt", "pickoff_error"}
     if any(token in normalized for token in negative_tokens):
+        return False
+    if normalized.startswith("pop_") or normalized.startswith("exchange_"):
         return False
     if role == "hitter":
         return not any(token in normalized for token in ("strikeout", "k_percent", "swing_miss", "out_"))
@@ -2041,6 +2208,10 @@ def statcast_history_sample_values(row: Any) -> dict[str, float | int | None]:
     for key in row.keys():
         key_text = str(key)
         if key_text.startswith("n_") and key_text.endswith("_formatted"):
+            values[key_text] = safe_float(row[key_text])
+        if key_text.endswith("_count"):
+            values[key_text] = safe_float(row[key_text])
+        if key_text.endswith("_ab_scoring"):
             values[key_text] = safe_float(row[key_text])
     return values
 
