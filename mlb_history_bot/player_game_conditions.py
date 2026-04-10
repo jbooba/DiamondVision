@@ -179,7 +179,7 @@ def parse_player_game_condition_query(question: str, settings: Settings) -> Play
         return None
     if metric.role not in {"hitter", "player", "pitcher"}:
         return None
-    if condition.key == "birthday" and metric.role not in {"hitter", "player"}:
+    if condition.key == "birthday" and metric.role not in {"hitter", "player", "pitcher"}:
         return None
     if condition.key == "weekday" and metric.role not in {"hitter", "player", "pitcher"}:
         return None
@@ -238,6 +238,8 @@ def parse_condition_minimum_qualifier(question: str) -> tuple[str | None, str | 
 
 def fetch_condition_rows(connection, query: PlayerGameConditionQuery) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if query.condition.key == "birthday":
+        if query.metric.role == "pitcher":
+            return fetch_pitching_birthday_rows(connection, query)
         return fetch_hitting_birthday_rows(connection, query)
     if query.condition.key == "weekday":
         if query.metric.role == "pitcher":
@@ -254,8 +256,9 @@ def fetch_hitting_birthday_rows(connection, query: PlayerGameConditionQuery) -> 
         """
         SELECT
             b.id AS retro_id,
-            p.namefirst,
-            p.namelast,
+            p.namefirst AS first,
+            p.namelast AS last,
+            'Birthday' AS condition_value,
             MIN(CAST(substr(b.date, 1, 4) AS INTEGER)) AS first_season,
             MAX(CAST(substr(b.date, 1, 4) AS INTEGER)) AS last_season,
             COUNT(*) AS games,
@@ -325,7 +328,7 @@ def fetch_hitting_birthday_rows(connection, query: PlayerGameConditionQuery) -> 
         }
         candidates.append(
             {
-                "player_name": build_person_name(row["namefirst"], row["namelast"], row["retro_id"]),
+                "player_name": build_person_name(row["first"], row["last"], row["retro_id"]),
                 "metric_value": float(metric_value),
                 "sample_size": float(sample_values.get(query.metric.sample_basis or "plate_appearances") or 0.0),
                 "games": safe_int(row["games"]) or 0,
@@ -381,6 +384,48 @@ def fetch_hitting_birthday_rows(connection, query: PlayerGameConditionQuery) -> 
         "max_basis_value": max_basis_value,
     }
     return candidates, metadata
+
+
+def fetch_pitching_birthday_rows(connection, query: PlayerGameConditionQuery) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not (table_exists(connection, "retrosheet_pitching") and table_exists(connection, "lahman_people")):
+        return [], {"total_row_count": 0}
+    rows = connection.execute(
+        """
+        SELECT
+            p.id AS retro_id,
+            people.namefirst AS first,
+            people.namelast AS last,
+            'Birthday' AS condition_value,
+            MIN(CAST(substr(p.date, 1, 4) AS INTEGER)) AS first_season,
+            MAX(CAST(substr(p.date, 1, 4) AS INTEGER)) AS last_season,
+            COUNT(*) AS games,
+            SUM(CAST(COALESCE(p.p_gs, '0') AS INTEGER)) AS games_started,
+            SUM(CAST(COALESCE(p.p_ipouts, '0') AS INTEGER)) AS ipouts,
+            SUM(CAST(COALESCE(p.p_h, '0') AS INTEGER)) AS hits_allowed,
+            SUM(CAST(COALESCE(p.p_hr, '0') AS INTEGER)) AS home_runs_allowed,
+            SUM(CAST(COALESCE(p.p_r, '0') AS INTEGER)) AS runs_allowed,
+            SUM(CAST(COALESCE(p.p_er, '0') AS INTEGER)) AS earned_runs,
+            SUM(CAST(COALESCE(p.p_w, '0') AS INTEGER)) + SUM(CAST(COALESCE(p.p_iw, '0') AS INTEGER)) AS walks,
+            SUM(CAST(COALESCE(p.p_hbp, '0') AS INTEGER)) AS hit_by_pitch,
+            SUM(CAST(COALESCE(p.p_k, '0') AS INTEGER)) AS strikeouts,
+            SUM(CAST(COALESCE(p.wp, '0') AS INTEGER)) AS wins,
+            SUM(CAST(COALESCE(p.lp, '0') AS INTEGER)) AS losses,
+            SUM(CAST(COALESCE(p.save, '0') AS INTEGER)) AS saves
+        FROM retrosheet_pitching AS p
+        JOIN lahman_people AS people
+          ON people.retroid = p.id
+        WHERE p.stattype = 'value'
+          AND p.gametype IN ('R', 'regular')
+          AND COALESCE(people.birthmonth, '') <> ''
+          AND COALESCE(people.birthday, '') <> ''
+          AND CAST(substr(p.date, 1, 4) AS INTEGER) BETWEEN ? AND ?
+          AND substr(p.date, 5, 2) = printf('%02d', CAST(people.birthmonth AS INTEGER))
+          AND substr(p.date, 7, 2) = printf('%02d', CAST(people.birthday AS INTEGER))
+        GROUP BY p.id, people.namefirst, people.namelast
+        """,
+        (query.start_season, query.end_season),
+    ).fetchall()
+    return rank_pitching_condition_rows(rows, query)
 
 
 def fetch_hitting_weekday_rows(connection, query: PlayerGameConditionQuery) -> tuple[list[dict[str, Any]], dict[str, Any]]:

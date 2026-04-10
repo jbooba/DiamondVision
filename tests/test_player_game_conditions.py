@@ -95,6 +95,9 @@ def build_connection() -> sqlite3.Connection:
             ("beta001", "Beta", "Slugger", "7", "4"),
             ("gamma001", "Gamma", "Slugger", "7", "5"),
             ("delta001", "Delta", "Slugger", "7", "4"),
+            ("ace001", "Monday", "Ace", "7", "5"),
+            ("ace002", "Tuesday", "Ace", "7", "6"),
+            ("ace003", "Wednesday", "Ace", "7", "7"),
         ],
     )
     connection.executemany(
@@ -227,6 +230,19 @@ def test_weekday_pitching_condition_supports_specific_weekday() -> None:
     assert snippet.payload["breakdown_all_values"] is False
     assert snippet.payload["rows"][0]["player_name"] == "Tuesday Ace"
     assert snippet.payload["rows"][0]["wins"] == 2
+
+
+def test_birthday_pitching_condition_lowest_era_leaderboard() -> None:
+    connection = build_connection()
+    researcher = PlayerGameConditionResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(connection, "Which pitcher has the lowest ERA on their birthday?")
+    connection.close()
+    assert snippet is not None
+    assert snippet.payload["role"] == "pitcher"
+    assert snippet.payload["condition_key"] == "birthday"
+    assert snippet.payload["rows"][0]["player_name"] in {"Monday Ace", "Tuesday Ace"}
+    assert snippet.payload["rows"][0]["games"] == 1
+    assert abs(snippet.payload["rows"][0]["era"] - 1.0) < 1e-9
 
 
 def test_birthday_condition_can_use_savant_birthday_index_provider() -> None:

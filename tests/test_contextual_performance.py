@@ -3,8 +3,11 @@ import sqlite3
 from mlb_history_bot.contextual_performance import (
     ContextualPerformanceResearcher,
     aggregate_count_chunk,
+    aggregate_opponent_pitcher_chunk,
+    build_birthday_matchup_snippet,
     build_team_relationship_snippet,
     extract_reached_counts_from_sequence,
+    parse_birthday_matchup_query,
     parse_opponent_pitcher_cohort_query,
     parse_count_split_query,
     parse_team_relationship_query,
@@ -459,3 +462,175 @@ def test_opponent_pitcher_cohort_snippet_uses_generic_pitcher_matchups() -> None
     assert snippet.source == "Opponent Pitcher Cohorts"
     assert snippet.payload["leaders"][0]["player_name"] == "Slugger One"
     assert snippet.payload["leaders"][0]["pitchers_faced"] == 1
+
+
+def test_parse_birthday_matchup_query_for_hitter_ops_against_birthday_pitchers() -> None:
+    query = parse_birthday_matchup_query(
+        "Which hitter has the highest OPS against pitchers on their birthday?"
+    )
+    assert query is not None
+    assert query.subject_role == "hitter"
+    assert query.birthday_side == "pitcher"
+    assert query.metric_key == "ops"
+    assert query.supported is True
+
+
+def test_parse_birthday_matchup_query_marks_pitcher_era_as_unsupported() -> None:
+    query = parse_birthday_matchup_query(
+        "Which pitcher has the lowest ERA when facing hitters on their birthday?"
+    )
+    assert query is not None
+    assert query.subject_role == "pitcher"
+    assert query.birthday_side == "batter"
+    assert query.metric_key is None
+    assert query.supported is False
+    assert query.metric_label == "ERA"
+
+
+def test_aggregate_opponent_pitcher_chunk_tracks_birthday_flags() -> None:
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [
+            {
+                "batter": "hit001",
+                "pitcher": "pit001",
+                "pa": "1",
+                "ab": "1",
+                "single": "1",
+                "double": "0",
+                "triple": "0",
+                "hr": "0",
+                "walk": "0",
+                "iw": "0",
+                "hbp": "0",
+                "sf": "0",
+                "k": "0",
+                "rbi": "1",
+                "date": "20240410",
+                "gametype": "regular",
+            },
+            {
+                "batter": "hit001",
+                "pitcher": "pit001",
+                "pa": "1",
+                "ab": "1",
+                "single": "0",
+                "double": "0",
+                "triple": "0",
+                "hr": "1",
+                "walk": "0",
+                "iw": "0",
+                "hbp": "0",
+                "sf": "0",
+                "k": "0",
+                "rbi": "1",
+                "date": "20240411",
+                "gametype": "regular",
+            },
+        ]
+    )
+    totals: dict[tuple[str, str], dict[str, int | str]] = {}
+    aggregate_opponent_pitcher_chunk(
+        frame,
+        totals,
+        {
+            "hit001": "0410",
+            "pit001": "0411",
+        },
+    )
+    row = totals[("hit001", "pit001")]
+    assert row["batter_birthday_plate_appearances"] == 1
+    assert row["batter_birthday_hits"] == 1
+    assert row["pitcher_birthday_plate_appearances"] == 1
+    assert row["pitcher_birthday_home_runs"] == 1
+
+
+def test_birthday_matchup_snippet_for_hitter_against_birthday_pitchers() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    initialize_database(connection)
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            retroid TEXT,
+            namefirst TEXT,
+            namelast TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_allplayers (
+            id TEXT,
+            first TEXT,
+            last TEXT
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO lahman_people VALUES (?,?,?,?)",
+        [
+            ("hit001", "hit001", "Birthday", "Slugger"),
+            ("pit001", "pit001", "Birthday", "Ace"),
+        ],
+    )
+    connection.execute("INSERT INTO retrosheet_allplayers VALUES ('hit001','Birthday','Slugger')")
+    upsert_retrosheet_player_opponent_pitchers(
+        connection,
+        [
+            {
+                "player_id": "hit001",
+                "pitcher_id": "pit001",
+                "plate_appearances": 30,
+                "at_bats": 28,
+                "hits": 6,
+                "doubles": 1,
+                "triples": 0,
+                "home_runs": 2,
+                "walks": 2,
+                "intentional_walks": 0,
+                "hit_by_pitch": 0,
+                "sacrifice_flies": 0,
+                "strikeouts": 4,
+                "runs_batted_in": 7,
+                "pitcher_birthday_plate_appearances": 30,
+                "pitcher_birthday_at_bats": 28,
+                "pitcher_birthday_hits": 6,
+                "pitcher_birthday_doubles": 1,
+                "pitcher_birthday_triples": 0,
+                "pitcher_birthday_home_runs": 2,
+                "pitcher_birthday_walks": 2,
+                "pitcher_birthday_intentional_walks": 0,
+                "pitcher_birthday_hit_by_pitch": 0,
+                "pitcher_birthday_sacrifice_flies": 0,
+                "pitcher_birthday_strikeouts": 4,
+                "pitcher_birthday_runs_batted_in": 7,
+                "first_season": 2021,
+                "last_season": 2024,
+            }
+        ],
+    )
+    query = parse_birthday_matchup_query(
+        "Which hitter has the highest OPS against pitchers on their birthday?"
+    )
+    snippet = build_birthday_matchup_snippet(connection, query)
+    connection.close()
+    assert snippet is not None
+    assert snippet.source == "Birthday Matchups"
+    assert snippet.payload["leaders"][0]["player_name"] == "Birthday Slugger"
+
+
+def test_birthday_matchup_gap_for_pitcher_era_against_birthday_hitters() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    initialize_database(connection)
+    query = parse_birthday_matchup_query(
+        "Which pitcher has the lowest ERA when facing hitters on their birthday?"
+    )
+    snippet = build_birthday_matchup_snippet(connection, query)
+    connection.close()
+    assert snippet is not None
+    assert snippet.source == "Birthday Matchups"
+    assert "does not carry the outs and earned-run totals" in snippet.summary
