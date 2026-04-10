@@ -251,6 +251,7 @@ def build_test_connection() -> sqlite3.Connection:
             p_win TEXT,
             p_loss TEXT,
             p_era TEXT,
+            pa TEXT,
             strikeout TEXT,
             walk TEXT,
             pitch_count TEXT,
@@ -258,6 +259,7 @@ def build_test_connection() -> sqlite3.Connection:
             ff_avg_speed TEXT,
             fastball_avg_speed TEXT,
             p_run TEXT,
+            meatball_percent TEXT,
             p_called_strike TEXT,
             linedrives TEXT,
             p_inh_runner TEXT,
@@ -273,15 +275,16 @@ def build_test_connection() -> sqlite3.Connection:
         """
         INSERT INTO statcast_history_pitcher_seasons(
             last_name_first_name, player_id, year, player_age, p_game, p_starting_p, p_win, p_loss, p_era,
-            strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run, p_called_strike, linedrives,
+            pa, strikeout, walk, pitch_count, n_ff_formatted, ff_avg_speed, fastball_avg_speed, p_run, meatball_percent, p_called_strike, linedrives,
             p_inh_runner, p_beq_runner_scored, p_ab_scoring, p_hit_scoring, p_pickoff_attempt_1b, p_pickoff_error_1b
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "210", "45", "2800", "920", "97.5", "97.1", "72", "610", "102", "18", "6", "165", "42", "9", "1"),
-            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "198", "51", "2700", "880", "97.2", "96.9", "76", "590", "98", "17", "5", "160", "39", "8", "0"),
-            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.80", "180", "60", "2600", "790", "96.1", "95.8", "85", "640", "118", "24", "9", "184", "55", "14", "3"),
-            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "172", "58", "2500", "760", "95.9", "95.5", "88", "620", "114", "22", "8", "176", "51", "13", "2"),
+            ("Pitcher, Paula", "300", "2021", "31", "32", "32", "16", "8", "3.20", "720", "210", "45", "2800", "920", "97.5", "97.1", "72", "7.3", "610", "102", "18", "6", "165", "42", "9", "1"),
+            ("Pitcher, Paula", "300", "2022", "32", "30", "30", "15", "9", "3.45", "690", "198", "51", "2700", "880", "97.2", "96.9", "76", "7.1", "590", "98", "17", "5", "160", "39", "8", "0"),
+            ("Rotation, Rita", "400", "2021", "30", "31", "31", "14", "10", "3.21", "710", "180", "60", "2600", "790", "96.1", "95.8", "85", "9.1", "640", "118", "24", "9", "184", "55", "14", "3"),
+            ("Rotation, Rita", "400", "2022", "31", "29", "29", "12", "11", "4.05", "675", "172", "58", "2500", "760", "95.9", "95.5", "88", "8.3", "620", "114", "22", "8", "176", "51", "13", "2"),
+            ("Closer, Cara", "500", "2021", "29", "30", "30", "9", "13", "4.50", "690", "165", "64", "2550", "770", "95.4", "95.0", "96", "6.0", "580", "126", "26", "10", "190", "61", "11", "2"),
         ],
     )
     con.commit()
@@ -474,18 +477,19 @@ def test_statcast_history_pickoff_attempt_and_error_aliases_stay_distinct() -> N
     con.close()
 
 
-def test_compound_pitching_metric_query_uses_primary_and_secondary_metrics() -> None:
+def test_compound_pitching_metric_query_uses_balanced_tradeoff_ranking() -> None:
     con = build_test_connection()
     researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
-    snippet = researcher.build_snippet(con, "which pitcher with the lowest ERA gave up the most HR last year?")
+    snippet = researcher.build_snippet(con, "who had the lowest ERA with the highest meatball percentage in 2021?")
     assert snippet is not None
-    assert snippet.payload["source_family"] == "historical"
-    assert snippet.payload["metric"] == "ERA"
-    assert snippet.payload["secondary_metric"] == "HR Allowed"
-    assert snippet.payload["rows"][0]["player_name"] == "Paula Pitcher"
-    assert round(snippet.payload["rows"][0]["metric_value"], 2) == 2.00
-    assert snippet.payload["rows"][0]["secondary_metric_value"] == 12
-    assert "primary ranking" in snippet.summary
+    assert snippet.payload["source_family"] == "statcast_history"
+    assert snippet.payload["metric"] == "era"
+    assert snippet.payload["secondary_metric"] == "Meatball Percent"
+    assert snippet.payload["compound_strategy"] == "balanced_tradeoff"
+    assert snippet.payload["rows"][0]["player_name"] == "Rita Rotation"
+    assert round(snippet.payload["rows"][0]["metric_value"], 2) == 3.21
+    assert round(snippet.payload["rows"][0]["secondary_metric_value"], 1) == 9.1
+    assert "balancing lowest era with highest Meatball Percent" in snippet.summary
     con.close()
 
 

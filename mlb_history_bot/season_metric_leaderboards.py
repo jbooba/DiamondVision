@@ -497,6 +497,7 @@ class SeasonMetricQuery:
     secondary_metric: SeasonMetricSpec | None = None
     secondary_descriptor: str | None = None
     secondary_sort_desc: bool | None = None
+    compound_strategy: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -702,6 +703,7 @@ class SeasonMetricLeaderboardResearcher:
                 "source_family": query.metric.source_family,
                 "team_filter": query.team_filter_name,
                 "secondary_metric": query.secondary_metric.label if query.secondary_metric is not None else None,
+                "compound_strategy": query.compound_strategy,
                 "rows": rows[:25],
             },
         )
@@ -721,6 +723,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
     secondary_metric = None
     secondary_descriptor = None
     secondary_sort_desc = None
+    compound_strategy = None
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
     if compound_metric_pair is not None:
@@ -731,6 +734,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         secondary_metric = secondary_match.metric
         secondary_descriptor = secondary_match.descriptor
         secondary_sort_desc = secondary_match.sort_desc
+        compound_strategy = "balanced_tradeoff"
     elif history_metric_match is not None and (
         season_metric_match is None or history_metric_match[0] > season_metric_match[0]
     ):
@@ -827,6 +831,7 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         secondary_metric=secondary_metric,
         secondary_descriptor=secondary_descriptor,
         secondary_sort_desc=secondary_sort_desc,
+        compound_strategy=compound_strategy,
     )
 
 
@@ -1087,6 +1092,10 @@ def build_statcast_provider_fallback_query(query: SeasonMetricQuery, catalog: Me
         minimum_starts=None,
         team_record_filter=query.team_record_filter,
         exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
+        secondary_metric=query.secondary_metric,
+        secondary_descriptor=query.secondary_descriptor,
+        secondary_sort_desc=query.secondary_sort_desc,
+        compound_strategy=query.compound_strategy,
     )
 
 
@@ -1141,6 +1150,10 @@ def build_statcast_history_fallback_query(query: SeasonMetricQuery) -> SeasonMet
         aggregate_range=query.aggregate_range,
         team_record_filter=query.team_record_filter,
         exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
+        secondary_metric=query.secondary_metric,
+        secondary_descriptor=query.secondary_descriptor,
+        secondary_sort_desc=query.secondary_sort_desc,
+        compound_strategy=query.compound_strategy,
     )
 
 
@@ -1177,6 +1190,10 @@ def build_source_fallback_query(query: SeasonMetricQuery, target_family: str) ->
         aggregate_range=query.aggregate_range,
         team_record_filter=query.team_record_filter,
         exclude_pitcher_only_hitters=query.exclude_pitcher_only_hitters,
+        secondary_metric=query.secondary_metric,
+        secondary_descriptor=query.secondary_descriptor,
+        secondary_sort_desc=query.secondary_sort_desc,
+        compound_strategy=query.compound_strategy,
     )
 
 
@@ -2314,6 +2331,9 @@ def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQ
     value_column = query.metric.dynamic_value_column or ""
     aggregate_mode = query.metric.dynamic_aggregate_mode or "sum"
     weight_column = query.metric.sample_basis
+    secondary_value_column = query.secondary_metric.dynamic_value_column if query.secondary_metric is not None else None
+    secondary_aggregate_mode = query.secondary_metric.dynamic_aggregate_mode if query.secondary_metric is not None else None
+    secondary_weight_column = query.secondary_metric.sample_basis if query.secondary_metric is not None else None
     for row in rows:
         metric_value = safe_float(row[value_column])
         if metric_value is None:
@@ -2333,6 +2353,9 @@ def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQ
                 "metric_value_sum": 0.0,
                 "metric_weight_sum": 0.0,
                 "metric_observation_count": 0,
+                "secondary_value_sum": 0.0,
+                "secondary_weight_sum": 0.0,
+                "secondary_observation_count": 0,
                 "sample_values": {},
                 "display_values": {},
             },
@@ -2351,6 +2374,30 @@ def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQ
         else:
             group["metric_value_sum"] += float(metric_value)
             group["metric_weight_sum"] += 1.0
+        if secondary_value_column and secondary_value_column in row.keys():
+            secondary_metric_value = safe_float(row[secondary_value_column])
+            if secondary_metric_value is not None:
+                group["secondary_observation_count"] += 1
+                if secondary_aggregate_mode == "weighted_avg":
+                    secondary_weight = (
+                        safe_float(row[secondary_weight_column])
+                        if secondary_weight_column and secondary_weight_column in row.keys()
+                        else None
+                    )
+                    if secondary_weight is None or secondary_weight <= 0:
+                        secondary_weight = 1.0
+                    group["secondary_value_sum"] += float(secondary_metric_value) * float(secondary_weight)
+                    group["secondary_weight_sum"] += float(secondary_weight)
+                elif secondary_aggregate_mode == "max":
+                    if (
+                        group["secondary_observation_count"] == 1
+                        or float(secondary_metric_value) > float(group["secondary_value_sum"])
+                    ):
+                        group["secondary_value_sum"] = float(secondary_metric_value)
+                    group["secondary_weight_sum"] = 1.0
+                else:
+                    group["secondary_value_sum"] += float(secondary_metric_value)
+                    group["secondary_weight_sum"] += 1.0
         merge_statcast_history_samples(group["sample_values"], row)
         merge_statcast_history_display_values(group["display_values"], row, query.role)
     candidates: list[dict[str, Any]] = []
@@ -2381,6 +2428,14 @@ def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQ
         }
         if weight_column:
             row_payload[weight_column] = values.get(weight_column)
+        if query.secondary_metric is not None and group["secondary_observation_count"] > 0:
+            secondary_weight_sum = float(group["secondary_weight_sum"] or 0.0)
+            if secondary_aggregate_mode == "weighted_avg":
+                if secondary_weight_sum > 0:
+                    row_payload["secondary_metric_value"] = float(group["secondary_value_sum"]) / secondary_weight_sum
+            else:
+                row_payload["secondary_metric_value"] = float(group["secondary_value_sum"])
+            row_payload["secondary_metric_label"] = query.secondary_metric.label
         attach_secondary_metric_value(row_payload, query)
         candidates.append(row_payload)
     return candidates
@@ -3022,26 +3077,90 @@ def passes_sample_threshold(metric: SeasonMetricSpec, values: dict[str, float | 
 
 def rank_rows(rows: list[dict[str, Any]], query: SeasonMetricQuery) -> list[dict[str, Any]]:
     rows = [row for row in rows if row.get("metric_value") is not None]
-    rows.sort(
+    if query.secondary_metric is not None and query.compound_strategy == "balanced_tradeoff":
+        rows = rank_rows_with_balanced_tradeoff(rows, query)
+    else:
+        rows.sort(
+            key=lambda row: (
+                -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
+                (
+                    -float(row["secondary_metric_value"])
+                    if query.secondary_metric is not None and query.secondary_sort_desc and row.get("secondary_metric_value") is not None
+                    else (
+                        float(row["secondary_metric_value"])
+                        if query.secondary_metric is not None and row.get("secondary_metric_value") is not None
+                        else (float("-inf") if query.secondary_metric is not None and query.secondary_sort_desc else float("inf"))
+                    )
+                ),
+                -(row.get("sample_size") or 0.0),
+                int(row.get("scope_end_season") or row.get("season") or 0),
+                str(row.get("player_name") or row.get("team_name") or ""),
+            )
+        )
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = index
+    return rows
+
+
+def normalize_metric_score(value: float, *, lower_is_better: bool, min_value: float, max_value: float) -> float:
+    if max_value <= min_value:
+        return 1.0
+    base_score = (float(value) - min_value) / (max_value - min_value)
+    return 1.0 - base_score if lower_is_better else base_score
+
+
+def rank_rows_with_balanced_tradeoff(rows: list[dict[str, Any]], query: SeasonMetricQuery) -> list[dict[str, Any]]:
+    eligible_rows = [row for row in rows if row.get("secondary_metric_value") is not None]
+    if not eligible_rows:
+        return rows
+    primary_values = [float(row["metric_value"]) for row in eligible_rows]
+    secondary_values = [float(row["secondary_metric_value"]) for row in eligible_rows]
+    primary_min = min(primary_values)
+    primary_max = max(primary_values)
+    secondary_min = min(secondary_values)
+    secondary_max = max(secondary_values)
+    for row in eligible_rows:
+        primary_score = normalize_metric_score(
+            float(row["metric_value"]),
+            lower_is_better=not query.sort_desc,
+            min_value=primary_min,
+            max_value=primary_max,
+        )
+        secondary_score = normalize_metric_score(
+            float(row["secondary_metric_value"]),
+            lower_is_better=not bool(query.secondary_sort_desc),
+            min_value=secondary_min,
+            max_value=secondary_max,
+        )
+        row["compound_primary_score"] = primary_score
+        row["compound_secondary_score"] = secondary_score
+        row["compound_score"] = (primary_score + secondary_score) / 2.0
+    ineligible_rows = [row for row in rows if row.get("secondary_metric_value") is None]
+    eligible_rows.sort(
         key=lambda row: (
-            -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
-            (
-                -float(row["secondary_metric_value"])
-                if query.secondary_metric is not None and query.secondary_sort_desc and row.get("secondary_metric_value") is not None
-                else (
-                    float(row["secondary_metric_value"])
-                    if query.secondary_metric is not None and row.get("secondary_metric_value") is not None
-                    else (float("-inf") if query.secondary_metric is not None and query.secondary_sort_desc else float("inf"))
-                )
-            ),
+            -float(row.get("compound_score") or 0.0),
+            -float(row.get("compound_primary_score") or 0.0),
+            -float(row.get("compound_secondary_score") or 0.0),
             -(row.get("sample_size") or 0.0),
             int(row.get("scope_end_season") or row.get("season") or 0),
             str(row.get("player_name") or row.get("team_name") or ""),
         )
     )
-    for index, row in enumerate(rows, start=1):
-        row["rank"] = index
-    return rows
+    if ineligible_rows:
+        ineligible_rows.sort(
+            key=lambda row: (
+                -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
+                -(row.get("sample_size") or 0.0),
+                int(row.get("scope_end_season") or row.get("season") or 0),
+                str(row.get("player_name") or row.get("team_name") or ""),
+            )
+        )
+    return [*eligible_rows, *ineligible_rows]
+
+
+def metric_goal_phrase(label: str, descriptor: str | None, sort_desc: bool | None) -> str:
+    goal_word = descriptor or ("highest" if sort_desc else "lowest")
+    return f"{goal_word} {label}".strip()
 
 
 def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, Any]]) -> str:
@@ -3060,11 +3179,19 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
             if secondary_value is not None
             else f" {query.secondary_metric.label} unavailable"
         )
-        summary = (
-            f"For {query.scope_label}{filter_text}{record_filter_text}, using {query.metric.label} as the primary ranking and "
-            f"{query.secondary_metric.label} as the companion tiebreaker/context, the leading {subject_phrase} is "
-            f"{subject_label}{scope_parenthetical} at {value_text} {query.metric.label}{secondary_text}."
-        )
+        if query.compound_strategy == "balanced_tradeoff":
+            summary = (
+                f"For {query.scope_label}{filter_text}{record_filter_text}, balancing "
+                f"{metric_goal_phrase(query.metric.label, query.descriptor, query.sort_desc)} with "
+                f"{metric_goal_phrase(query.secondary_metric.label, query.secondary_descriptor, query.secondary_sort_desc)}, "
+                f"the leading {subject_phrase} is {subject_label}{scope_parenthetical} at {value_text} {query.metric.label}{secondary_text}."
+            )
+        else:
+            summary = (
+                f"For {query.scope_label}{filter_text}{record_filter_text}, using {query.metric.label} as the primary ranking and "
+                f"{query.secondary_metric.label} as the companion tiebreaker/context, the leading {subject_phrase} is "
+                f"{subject_label}{scope_parenthetical} at {value_text} {query.metric.label}{secondary_text}."
+            )
     else:
         summary = (
             f"For {query.scope_label}{filter_text}{record_filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
