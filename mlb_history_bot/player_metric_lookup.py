@@ -39,6 +39,7 @@ from .season_metric_leaderboards import (
 from .storage import (
     STATCAST_HISTORY_BATTER_TABLE,
     STATCAST_HISTORY_PITCHER_TABLE,
+    audit_statcast_history_table,
     get_connection,
     list_table_columns,
     quote_identifier,
@@ -102,6 +103,8 @@ class PlayerMetricLookupResearcher:
                     result = fetch_statcast_metric_result(query)
                 if result is None:
                     result = fetch_statcast_history_metric_result(connection, query)
+                if result is None and query.history_spec is not None:
+                    result = build_statcast_history_gap_result(connection, query)
             if result is None:
                 return None
             return EvidenceSnippet(
@@ -475,6 +478,51 @@ def fetch_statcast_history_metric_result(connection, query: PlayerMetricQuery) -
                     "context_2": context[1] if len(context) > 1 else "",
                 }
             ],
+        },
+    }
+
+
+def build_statcast_history_gap_result(connection, query: PlayerMetricQuery) -> dict[str, Any] | None:
+    spec = query.history_spec
+    if spec is None:
+        return None
+    table_name = spec.dynamic_table_name or ""
+    if not table_name:
+        return None
+    audit = audit_statcast_history_table(connection, table_name, player_name=query.player_name)
+    matches = audit.get("player_matches") or []
+    display_metric = display_statcast_history_metric_label(spec.label)
+    if not matches:
+        summary = (
+            f"I can't give a grounded exact {display_metric} for {query.player_name} in {query.season} "
+            f"from the imported Statcast history, because that table has no matching player row for him."
+        )
+    else:
+        seasons = []
+        for match in matches:
+            seasons.extend(int(season) for season in match.get("seasons", []))
+        ordered_seasons = sorted(set(seasons))
+        if query.season in ordered_seasons:
+            return None
+        season_text = ", ".join(str(season) for season in ordered_seasons)
+        summary = (
+            f"I can't give a grounded exact {display_metric} for {query.player_name} in {query.season} "
+            f"from the imported Statcast history, because that player-season row is missing from the imported table. "
+            f"Available imported seasons for {query.player_name}: {season_text}."
+        )
+    return {
+        "source": "Statcast Custom History",
+        "title": f"{query.player_name} {query.season} {display_metric} gap",
+        "citation": f"Imported Statcast custom leaderboard coverage check for {table_name}",
+        "summary": summary,
+        "payload": {
+            "analysis_type": "player_metric_lookup_gap",
+            "mode": query.mode,
+            "player": query.player_name,
+            "season": query.season,
+            "metric": display_metric,
+            "source_group": "pitching" if spec.role == "pitcher" else "batting",
+            "rows": [],
         },
     }
 

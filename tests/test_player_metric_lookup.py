@@ -40,6 +40,17 @@ class FakeLiveClient:
                     "primaryPosition": {"abbreviation": "1B", "code": "3"},
                 }
             ]
+        if normalized == "nathan eovaldi":
+            return [
+                {
+                    "id": 543135,
+                    "fullName": "Nathan Eovaldi",
+                    "active": True,
+                    "isPlayer": True,
+                    "isVerified": True,
+                    "primaryPosition": {"abbreviation": "P", "code": "1"},
+                }
+            ]
         return []
 
 
@@ -55,17 +66,26 @@ def create_history_tables(connection: sqlite3.Connection) -> None:
             p_era TEXT,
             pitch_count TEXT,
             whiff_percent TEXT,
-            p_called_strike TEXT
+            p_called_strike TEXT,
+            meatball_percent TEXT
         )
         """
     )
     connection.execute(
         """
         INSERT INTO statcast_history_pitcher_seasons(
-            last_name_first_name, player_id, year, pitch_hand, pa, p_era, pitch_count, whiff_percent, p_called_strike
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last_name_first_name, player_id, year, pitch_hand, pa, p_era, pitch_count, whiff_percent, p_called_strike, meatball_percent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ("Skubal, Tarik", "669373", "2025", "L", "748", "2.39", "2849", "32.5", "546"),
+        ("Skubal, Tarik", "669373", "2025", "L", "748", "2.39", "2849", "32.5", "546", "7.1"),
+    )
+    connection.execute(
+        """
+        INSERT INTO statcast_history_pitcher_seasons(
+            last_name_first_name, player_id, year, pitch_hand, pa, p_era, pitch_count, whiff_percent, p_called_strike, meatball_percent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("Eovaldi, Nathan", "543135", "2024", "R", "701", "3.80", "2622", "26.8", "409", "6.8"),
     )
     connection.execute(
         """
@@ -179,3 +199,23 @@ def test_parse_player_metric_query_recognizes_cross_role_count_aliases() -> None
     assert hitter_query.history_spec is not None
     assert hitter_query.history_spec.dynamic_value_column == "linedrives"
     connection.close()
+
+
+def test_player_metric_lookup_reports_missing_imported_history_season_gap(tmp_path: Path) -> None:
+    database_path = tmp_path / "mlb_history.sqlite3"
+    connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
+    create_history_tables(connection)
+    connection.close()
+
+    settings = replace(TEST_SETTINGS, database_path=database_path, processed_data_dir=tmp_path)
+    researcher = PlayerMetricLookupResearcher(settings)
+    researcher.live_client = FakeLiveClient()
+
+    snippet = researcher.build_snippet("what was Nathan Eovaldi's Meatball percentage last year?")
+
+    assert snippet is not None
+    assert snippet.source == "Statcast Custom History"
+    assert "2025" in snippet.summary
+    assert "missing from the imported table" in snippet.summary
+    assert "2024" in snippet.summary

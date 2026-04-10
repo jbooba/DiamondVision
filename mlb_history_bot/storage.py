@@ -1015,6 +1015,109 @@ def fetch_rows(
     return connection.execute(sql, tuple(parameters or ())).fetchall()
 
 
+def audit_statcast_history_table(
+    connection: sqlite3.Connection,
+    table_name: str,
+    *,
+    player_name: str | None = None,
+) -> dict[str, Any]:
+    initialize_database(connection)
+    if not table_exists(connection, table_name):
+        return {
+            "table_name": table_name,
+            "exists": False,
+            "row_count": 0,
+            "year_counts": [],
+            "player_matches": [],
+        }
+
+    year_column = resolve_column(connection, table_name, ("year", "season", "season_year"))
+    name_column = resolve_column(connection, table_name, ("last_name_first_name", "player_name", "name"))
+    row_count = int(
+        connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(table_name)}").fetchone()[0] or 0
+    )
+
+    year_counts: list[dict[str, int]] = []
+    if year_column is not None:
+        rows = connection.execute(
+            f"""
+            SELECT CAST({quote_identifier(year_column)} AS INTEGER) AS season, COUNT(*) AS row_count
+            FROM {quote_identifier(table_name)}
+            WHERE TRIM(COALESCE({quote_identifier(year_column)}, '')) <> ''
+            GROUP BY CAST({quote_identifier(year_column)} AS INTEGER)
+            ORDER BY CAST({quote_identifier(year_column)} AS INTEGER)
+            """
+        ).fetchall()
+        year_counts = [
+            {"season": int(row["season"] or 0), "row_count": int(row["row_count"] or 0)}
+            for row in rows
+            if row["season"] is not None
+        ]
+
+    player_matches: list[dict[str, Any]] = []
+    if player_name and name_column is not None and year_column is not None:
+        normalized_target = _normalize_person_search_name(player_name)
+        rows = connection.execute(
+            f"""
+            SELECT {quote_identifier(name_column)} AS player_name,
+                   CAST({quote_identifier(year_column)} AS INTEGER) AS season
+            FROM {quote_identifier(table_name)}
+            WHERE TRIM(COALESCE({quote_identifier(name_column)}, '')) <> ''
+              AND TRIM(COALESCE({quote_identifier(year_column)}, '')) <> ''
+            ORDER BY lower({quote_identifier(name_column)}), CAST({quote_identifier(year_column)} AS INTEGER)
+            """
+        ).fetchall()
+        grouped: dict[str, set[int]] = {}
+        for row in rows:
+            raw_name = str(row["player_name"] or "").strip()
+            season_value = row["season"]
+            if not raw_name or season_value is None:
+                continue
+            normalized_name = _normalize_person_search_name(raw_name)
+            if not _person_name_matches(normalized_name, normalized_target):
+                continue
+            grouped.setdefault(raw_name, set()).add(int(season_value))
+        for raw_name, seasons in sorted(grouped.items()):
+            ordered = sorted(seasons)
+            first_season = ordered[0]
+            last_season = ordered[-1]
+            expected = set(range(first_season, last_season + 1))
+            missing = sorted(expected - seasons)
+            player_matches.append(
+                {
+                    "player_name": raw_name,
+                    "season_count": len(ordered),
+                    "first_season": first_season,
+                    "last_season": last_season,
+                    "seasons": ordered,
+                    "missing_between": missing,
+                }
+            )
+
+    return {
+        "table_name": table_name,
+        "exists": True,
+        "row_count": row_count,
+        "year_counts": year_counts,
+        "player_matches": player_matches,
+    }
+
+
+def _normalize_person_search_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _person_name_matches(candidate: str, target: str) -> bool:
+    if not candidate or not target:
+        return False
+    if candidate == target or target in candidate or candidate in target:
+        return True
+    candidate_tokens = tuple(token for token in candidate.split() if token)
+    target_tokens = tuple(token for token in target.split() if token)
+    return bool(candidate_tokens) and bool(target_tokens) and set(candidate_tokens) == set(target_tokens)
+
+
 def get_metadata_value(connection: sqlite3.Connection, key: str) -> str | None:
     initialize_database(connection)
     row = connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()

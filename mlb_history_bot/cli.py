@@ -17,7 +17,13 @@ from .ingest import ingest_project_data
 from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
 from .statcast_sync import sync_statcast_data
-from .storage import get_connection, import_statcast_history_exports
+from .storage import (
+    STATCAST_HISTORY_BATTER_TABLE,
+    STATCAST_HISTORY_PITCHER_TABLE,
+    audit_statcast_history_table,
+    get_connection,
+    import_statcast_history_exports,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -110,6 +116,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--data-dir",
         type=Path,
         help="Optional override for the bundled CSV directory (defaults to data/statcast_history)",
+    )
+
+    audit_statcast_history_parser = subparsers.add_parser(
+        "audit-statcast-history",
+        help="Inspect imported Statcast custom-history coverage by table, year, and optional player",
+    )
+    audit_statcast_history_parser.add_argument(
+        "--player",
+        type=str,
+        help="Optional player name to inspect within the imported Statcast custom-history tables",
+    )
+    audit_statcast_history_parser.add_argument(
+        "--role",
+        choices=("batter", "pitcher", "both"),
+        default="both",
+        help="Which imported Statcast history table(s) to inspect",
     )
 
     refresh_statcast_parser = subparsers.add_parser(
@@ -350,6 +372,50 @@ def main() -> int:
                 )
         for message in messages:
             print(message)
+        return 0
+
+    if args.command == "audit-statcast-history":
+        selected_tables: list[tuple[str, str]] = []
+        if args.role in {"batter", "both"}:
+            selected_tables.append(("batter", STATCAST_HISTORY_BATTER_TABLE))
+        if args.role in {"pitcher", "both"}:
+            selected_tables.append(("pitcher", STATCAST_HISTORY_PITCHER_TABLE))
+        connection = get_connection(settings.database_path)
+        try:
+            for role_label, table_name in selected_tables:
+                audit = audit_statcast_history_table(
+                    connection,
+                    table_name,
+                    player_name=args.player,
+                )
+                print(f"[{role_label}] {table_name}")
+                if not audit["exists"]:
+                    print("  table missing")
+                    continue
+                print(f"  total rows: {audit['row_count']}")
+                if audit["year_counts"]:
+                    year_summary = ", ".join(
+                        f"{row['season']}: {row['row_count']}" for row in audit["year_counts"]
+                    )
+                    print(f"  rows by year: {year_summary}")
+                else:
+                    print("  rows by year: none")
+                if args.player:
+                    matches = audit["player_matches"]
+                    if not matches:
+                        print(f"  player matches: none for {args.player}")
+                    else:
+                        for match in matches:
+                            seasons = ", ".join(str(season) for season in match["seasons"])
+                            print(
+                                f"  player: {match['player_name']} | seasons: {seasons} | "
+                                f"first={match['first_season']} last={match['last_season']}"
+                            )
+                            if match["missing_between"]:
+                                missing = ", ".join(str(season) for season in match["missing_between"])
+                                print(f"    missing between first/last: {missing}")
+        finally:
+            connection.close()
         return 0
 
     if args.command == "sync-retrosheet-splits":
