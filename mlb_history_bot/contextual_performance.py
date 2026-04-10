@@ -15,6 +15,12 @@ from .metrics import MetricCatalog
 from .models import EvidenceSnippet
 from .query_utils import extract_minimum_qualifier
 from .retrosheet_splits import open_retrosheet_plays_stream
+from .season_metric_leaderboards import (
+    compute_historical_fip_constant,
+    find_season_metric,
+    normalize_metric_search_text,
+    strip_qualifier_clauses,
+)
 from .storage import (
     clear_retrosheet_player_count_splits,
     clear_retrosheet_player_opponent_pitchers,
@@ -31,6 +37,8 @@ from .storage import (
     upsert_retrosheet_player_reached_count_splits,
     upsert_retrosheet_player_opponent_contexts,
 )
+from .team_evaluator import safe_int
+from .team_season_leaders import outs_to_innings_notation, select_historical_pitching_metric
 
 
 BEST_HINTS = {"best", "highest", "most", "top"}
@@ -151,14 +159,61 @@ PITCHER_BIRTHDAY_RELATION_HINTS = (
     "pitchers on their birthdays",
     "birthday pitchers",
 )
-PITCHER_BIRTHDAY_UNSUPPORTED_METRICS: dict[str, str] = {
-    "era": "ERA",
-    "earned run average": "ERA",
-    "whip": "WHIP",
-    "fip": "FIP",
-    "wins": "Wins",
-    "losses": "Losses",
-    "saves": "Saves",
+PITCHING_GAME_LINE_MINIMUM_QUALIFIERS: tuple[tuple[str, tuple[str, ...], int], ...] = (
+    ("plate_appearances", ("plate appearances", "plate appearance", "pa", "pas"), 1),
+    ("at_bats", ("at-bats", "at-bat", "at bats", "at bat", "ab", "abs"), 1),
+    ("games_started", ("games started", "starts", "start", "gs"), 1),
+    ("games", ("games", "game"), 1),
+    ("ipouts", ("innings pitched", "innings", "inning", "ip"), 3),
+    ("wins", ("wins", "win"), 1),
+    ("losses", ("losses", "loss"), 1),
+    ("saves", ("saves", "save"), 1),
+    ("walks", ("walks", "walk", "bb"), 1),
+    ("strikeouts", ("strikeouts", "strikeout", "so", "ks"), 1),
+    ("hits_allowed", ("hits allowed", "hit allowed"), 1),
+    ("home_runs_allowed", ("home runs allowed", "home run allowed", "hr allowed"), 1),
+    ("earned_runs", ("earned runs", "earned run", "er"), 1),
+)
+PITCHING_GAME_LINE_CONTEXT_METRIC_KEYS = {
+    "ba",
+    "obp",
+    "slg",
+    "ops",
+    "plate_appearances",
+    "at_bats",
+    "hits",
+    "doubles",
+    "triples",
+    "home_runs",
+    "walks",
+    "strikeouts",
+    "hit_by_pitch",
+}
+PITCHING_GAME_LINE_SEASON_METRIC_KEYS = {
+    "games",
+    "games_started",
+    "era",
+    "fip",
+    "whip",
+    "wins",
+    "losses",
+    "saves",
+    "innings",
+    "hits_allowed",
+    "earned_runs",
+    "home_runs_allowed",
+    "walks",
+    "walks_per_game",
+    "strikeouts",
+    "strikeouts_per_game",
+    "earned_runs_per_game",
+    "strikeouts_per_9",
+    "walks_per_9",
+    "hits_per_9",
+    "hits_allowed_per_game",
+    "home_runs_per_9",
+    "home_runs_allowed_per_game",
+    "strikeout_to_walk",
 }
 
 
@@ -220,6 +275,7 @@ class BirthdayMatchupQuery:
     min_sample_size: int
     sample_basis: str | None
     supported: bool
+    source_mode: str = "opponent_matchup"
 
 
 CONTEXT_METRIC_SPECS = (
@@ -620,8 +676,27 @@ def sample_basis_phrase(sample_basis: str) -> str:
     phrase_map = {
         "at_bats": "at-bats",
         "plate_appearances": "plate appearances",
+        "games": "games",
+        "games_started": "starts",
+        "ipouts": "innings pitched",
+        "wins": "wins",
+        "losses": "losses",
+        "saves": "saves",
+        "walks": "walks",
+        "strikeouts": "strikeouts",
+        "hits_allowed": "hits allowed",
+        "home_runs_allowed": "home runs allowed",
+        "earned_runs": "earned runs",
     }
     return phrase_map.get(sample_basis, sample_basis.replace("_", " "))
+
+
+def format_birthday_sample_minimum(minimum: int, sample_basis: str) -> str:
+    if sample_basis != "ipouts":
+        return str(minimum)
+    if minimum % 3 == 0:
+        return str(minimum // 3)
+    return outs_to_innings_notation(minimum)
 
 
 def build_sample_clause(*, basis: str | None, minimum: int, alias: str) -> tuple[str, tuple[Any, ...]]:
@@ -764,20 +839,22 @@ def parse_birthday_matchup_query(question: str) -> BirthdayMatchupQuery | None:
     else:
         subject_role = "pitcher" if birthday_side == "batter" else "hitter"
 
-    for alias, label in PITCHER_BIRTHDAY_UNSUPPORTED_METRICS.items():
-        if alias in lowered:
-            descriptor = "lowest" if any(token in lowered for token in MAGNITUDE_LOW_HINTS | WORST_HINTS) else "highest"
-            sort_desc = descriptor in {"highest", "most"}
+    if subject_role == "pitcher" and birthday_side == "batter":
+        season_metric = detect_pitching_birthday_game_line_metric(question)
+        if season_metric is not None:
+            min_sample_basis, min_sample_size = resolve_pitching_game_line_requirements(question)
+            descriptor, sort_desc = resolve_pitching_game_line_sort(lowered, season_metric.higher_is_better)
             return BirthdayMatchupQuery(
                 subject_role=subject_role,
                 birthday_side=birthday_side,
-                metric_key=None,
-                metric_label=label,
+                metric_key=season_metric.key,
+                metric_label=season_metric.label,
                 descriptor=descriptor,
                 sort_desc=sort_desc,
-                min_sample_size=0,
-                sample_basis=None,
-                supported=False,
+                min_sample_size=min_sample_size,
+                sample_basis=min_sample_basis,
+                supported=True,
+                source_mode="pitching_game_lines",
             )
 
     default_key = "ops" if any(token in lowered for token in OFFENSIVE_SUMMARY_HINTS) else "ba"
@@ -794,7 +871,50 @@ def parse_birthday_matchup_query(question: str) -> BirthdayMatchupQuery | None:
         min_sample_size=min_sample_size,
         sample_basis=sample_basis,
         supported=True,
+        source_mode="opponent_matchup",
     )
+
+
+def detect_pitching_birthday_game_line_metric(question: str):
+    normalized_metric_text = normalize_metric_search_text(strip_qualifier_clauses(question.lower()))
+    season_metric = find_season_metric(normalized_metric_text)
+    if season_metric is not None and season_metric.role == "pitcher" and season_metric.key in PITCHING_GAME_LINE_SEASON_METRIC_KEYS:
+        return season_metric
+    context_metric = detect_context_metric_spec(normalized_metric_text, default_key="ba")
+    if context_metric.key not in PITCHING_GAME_LINE_CONTEXT_METRIC_KEYS:
+        return None
+
+    @dataclass(slots=True, frozen=True)
+    class _SimplePitchingMetric:
+        key: str
+        label: str
+        higher_is_better: bool
+
+    return _SimplePitchingMetric(
+        key=context_metric.key,
+        label=context_metric.label,
+        higher_is_better=context_metric.key in {"strikeouts"},
+    )
+
+
+def resolve_pitching_game_line_requirements(question: str) -> tuple[str | None, int]:
+    for basis, nouns, multiplier in PITCHING_GAME_LINE_MINIMUM_QUALIFIERS:
+        value = extract_minimum_qualifier(question, nouns)
+        if value is not None:
+            return basis, value * multiplier
+    return None, 0
+
+
+def resolve_pitching_game_line_sort(lowered_question: str, higher_is_better: bool) -> tuple[str, bool]:
+    if any(token in lowered_question for token in MAGNITUDE_HIGH_HINTS):
+        return "highest", True
+    if any(token in lowered_question for token in MAGNITUDE_LOW_HINTS):
+        return "lowest", False
+    if "worst" in lowered_question:
+        return "worst", not higher_is_better
+    if "best" in lowered_question:
+        return "best", higher_is_better
+    return ("highest" if higher_is_better else "lowest"), higher_is_better
 
 
 def resolve_birthday_matchup_sort(
@@ -877,9 +997,10 @@ def build_contextual_player_name_sql(
             player_names AS (
                 SELECT
                     playerid,
+                    lower(COALESCE(retroid, '')) AS retroid,
                     NULLIF(TRIM(COALESCE(namefirst, '') || ' ' || COALESCE(namelast, '')), '') AS player_name
                 FROM lahman_people
-                WHERE COALESCE(playerid, '') <> ''
+                WHERE COALESCE(playerid, '') <> '' OR COALESCE(retroid, '') <> ''
             )
             """
         )
@@ -887,6 +1008,7 @@ def build_contextual_player_name_sql(
             f"""
             LEFT JOIN player_names
               ON player_names.playerid = {table_alias}.{id_column}
+              OR player_names.retroid = lower({table_alias}.{id_column})
             """
         )
         name_parts.append("player_names.player_name")
@@ -1129,7 +1251,7 @@ def build_opponent_pitcher_cohort_snippet(connection, query: OpponentPitcherCoho
     )
     if query.min_sample_size and query.sample_basis:
         summary = (
-            f"{summary} I used a minimum of {query.min_sample_size} "
+            f"{summary} I used a minimum of {format_birthday_sample_minimum(query.min_sample_size, query.sample_basis)} "
             f"{sample_basis_phrase(query.sample_basis)} for stability."
         )
     trailing = rows[1:4]
@@ -1160,26 +1282,44 @@ def build_opponent_pitcher_cohort_snippet(connection, query: OpponentPitcherCoho
 
 
 def build_birthday_matchup_snippet(connection, query: BirthdayMatchupQuery) -> EvidenceSnippet:
-    if not table_exists(connection, "retrosheet_player_opponent_pitchers"):
-        return build_birthday_matchup_gap_snippet(query)
     if not query.supported or query.metric_key is None:
         return build_birthday_matchup_gap_snippet(query)
-    rows = fetch_birthday_matchup_rows(connection, query)
+    if query.source_mode == "pitching_game_lines":
+        if not (
+            table_exists(connection, "retrosheet_pitching")
+            and table_exists(connection, "retrosheet_batting")
+            and table_exists(connection, "lahman_people")
+        ):
+            return build_birthday_matchup_gap_snippet(query)
+        rows = fetch_birthday_pitching_game_line_rows(connection, query)
+    else:
+        if not table_exists(connection, "retrosheet_player_opponent_pitchers"):
+            return build_birthday_matchup_gap_snippet(query)
+        rows = fetch_birthday_matchup_rows(connection, query)
     if not rows:
         return build_birthday_matchup_gap_snippet(query)
     leader = rows[0]
     context_label = birthday_matchup_context_label(query)
     performer_label = "pitcher" if query.subject_role == "pitcher" else "hitter"
-    summary = (
-        f"Across imported Retrosheet history, the {query.descriptor} {performer_label} by {query.metric_label} "
-        f"when facing {context_label} is {leader['player_name']} at "
-        f"{format_context_metric_value(query.metric_key, leader['metric_value'])}. "
-        f"That line spans {leader['plate_appearances']} plate appearances against "
-        f"{leader['opponents_faced']} birthday opponent(s) from {leader['first_season']} to {leader['last_season']}."
-    )
+    if query.source_mode == "pitching_game_lines":
+        summary = (
+            f"Across imported Retrosheet pitching game logs, the {query.descriptor} {performer_label} by {query.metric_label} "
+            f"when pitching in games that included {context_label} is {leader['player_name']} at "
+            f"{format_context_metric_value(query.metric_key, leader['metric_value'])}. "
+            f"That line spans {leader['games']} qualifying games, {leader['innings']}, and "
+            f"{leader['plate_appearances']} batters faced from {leader['first_season']} to {leader['last_season']}."
+        )
+    else:
+        summary = (
+            f"Across imported Retrosheet history, the {query.descriptor} {performer_label} by {query.metric_label} "
+            f"when facing {context_label} is {leader['player_name']} at "
+            f"{format_context_metric_value(query.metric_key, leader['metric_value'])}. "
+            f"That line spans {leader['plate_appearances']} plate appearances against "
+            f"{leader['opponents_faced']} birthday opponent(s) from {leader['first_season']} to {leader['last_season']}."
+        )
     if query.min_sample_size and query.sample_basis:
         summary = (
-            f"{summary} I used a minimum of {query.min_sample_size} "
+            f"{summary} I used a minimum of {format_birthday_sample_minimum(query.min_sample_size, query.sample_basis)} "
             f"{sample_basis_phrase(query.sample_basis)} for stability."
         )
     trailing = rows[1:4]
@@ -1195,7 +1335,11 @@ def build_birthday_matchup_snippet(connection, query: BirthdayMatchupQuery) -> E
     return EvidenceSnippet(
         source="Birthday Matchups",
         title=f"{context_label} {query.metric_label} leaderboard",
-        citation="Retrosheet plays.csv aggregated with player birthday flags from Lahman person records",
+        citation=(
+            "Retrosheet pitching game logs filtered to games with opposing birthday hitters via Lahman birth dates"
+            if query.source_mode == "pitching_game_lines"
+            else "Retrosheet plays.csv aggregated with player birthday flags from Lahman person records"
+        ),
         summary=summary,
         payload={
             "analysis_type": "birthday_matchup_leaderboard",
@@ -1203,6 +1347,7 @@ def build_birthday_matchup_snippet(connection, query: BirthdayMatchupQuery) -> E
             "subject_role": query.subject_role,
             "birthday_side": query.birthday_side,
             "metric": query.metric_label,
+            "source_mode": query.source_mode,
             "leaders": rows,
         },
     )
@@ -1211,26 +1356,23 @@ def build_birthday_matchup_snippet(connection, query: BirthdayMatchupQuery) -> E
 def build_birthday_matchup_gap_snippet(query: BirthdayMatchupQuery) -> EvidenceSnippet:
     context_label = birthday_matchup_context_label(query)
     performer_label = "pitcher" if query.subject_role == "pitcher" else "hitter"
-    supported_note = ""
-    if query.subject_role == "pitcher":
-        supported_note = (
-            " The birthday matchup warehouse can still answer pitcher-side opponent outcomes like BA, OBP, SLG, OPS, "
-            "hits, HR, walks, strikeouts, and RBI allowed against birthday hitters."
-        )
     summary = (
         f"I understand this as a leaderboard for the {query.descriptor} {performer_label} by {query.metric_label} "
         f"when facing {context_label}."
     )
     if query.supported:
-        summary = (
-            f"{summary} The project can answer that once the birthday-conditioned opponent matchup warehouse has been built. "
-            "Run `python -m mlb_history_bot sync-retrosheet-pitcher-cohorts` to build it."
-        )
+        if query.source_mode == "pitching_game_lines":
+            summary = (
+                f"{summary} The project can answer that once the local Retrosheet batting and pitching game logs are available. "
+                "This path uses full pitcher game lines filtered to games that included at least one opposing birthday hitter."
+            )
+        else:
+            summary = (
+                f"{summary} The project can answer that once the birthday-conditioned opponent matchup warehouse has been built. "
+                "Run `python -m mlb_history_bot sync-retrosheet-pitcher-cohorts` to build it."
+            )
     else:
-        summary = (
-            f"{summary} The current birthday-conditioned matchup warehouse does not carry the outs and earned-run totals "
-            f"needed to compute {query.metric_label} for that split.{supported_note}"
-        )
+        summary = f"{summary} This birthday-conditioned split is not supported by the current local warehouse."
     return EvidenceSnippet(
         source="Birthday Matchups",
         title=f"{context_label} {query.metric_label} source gap",
@@ -1369,6 +1511,234 @@ def fetch_birthday_matchup_rows(connection, query: BirthdayMatchupQuery) -> list
         }
         for row in rows
     ]
+
+
+def fetch_birthday_pitching_game_line_rows(connection, query: BirthdayMatchupQuery) -> list[dict[str, Any]]:
+    cte_sql, joins_sql, name_expression = build_contextual_player_name_sql(
+        connection,
+        "birthday_games",
+        id_column="pitcher_id",
+    )
+    extra_ctes = cte_sql[5:].strip() if cte_sql.startswith("WITH ") else cte_sql.strip()
+    combined_cte = "WITH"
+    rows = connection.execute(
+        f"""
+        {combined_cte}
+        birthday_batter_games AS (
+                SELECT DISTINCT
+                    b.gid AS gid,
+                    b.team AS team
+                FROM retrosheet_batting AS b
+                JOIN lahman_people AS people
+                  ON people.retroid = b.id
+                WHERE b.stattype = 'value'
+                  AND b.gametype IN ('R', 'regular')
+                  AND COALESCE(people.birthmonth, '') <> ''
+                  AND COALESCE(people.birthday, '') <> ''
+                  AND substr(b.date, 5, 2) = printf('%02d', CAST(people.birthmonth AS INTEGER))
+                  AND substr(b.date, 7, 2) = printf('%02d', CAST(people.birthday AS INTEGER))
+            ),
+        birthday_games AS (
+            SELECT
+                p.id AS pitcher_id,
+                MIN(CAST(substr(p.date, 1, 4) AS INTEGER)) AS first_season,
+                MAX(CAST(substr(p.date, 1, 4) AS INTEGER)) AS last_season,
+                COUNT(*) AS games,
+                SUM(CAST(COALESCE(p.p_gs, '0') AS INTEGER)) AS games_started,
+                SUM(CAST(COALESCE(p.p_ipouts, '0') AS INTEGER)) AS ipouts,
+                SUM(CAST(COALESCE(p.p_bfp, '0') AS INTEGER)) AS plate_appearances,
+                SUM(
+                    CAST(COALESCE(p.p_bfp, '0') AS INTEGER)
+                    - CAST(COALESCE(p.p_w, '0') AS INTEGER)
+                    - CAST(COALESCE(p.p_iw, '0') AS INTEGER)
+                    - CAST(COALESCE(p.p_hbp, '0') AS INTEGER)
+                    - CAST(COALESCE(p.p_sh, '0') AS INTEGER)
+                    - CAST(COALESCE(p.p_sf, '0') AS INTEGER)
+                ) AS at_bats,
+                SUM(CAST(COALESCE(p.p_h, '0') AS INTEGER)) AS hits,
+                SUM(CAST(COALESCE(p.p_d, '0') AS INTEGER)) AS doubles,
+                SUM(CAST(COALESCE(p.p_t, '0') AS INTEGER)) AS triples,
+                SUM(CAST(COALESCE(p.p_hr, '0') AS INTEGER)) AS home_runs,
+                SUM(CAST(COALESCE(p.p_h, '0') AS INTEGER)) AS hits_allowed,
+                SUM(CAST(COALESCE(p.p_hr, '0') AS INTEGER)) AS home_runs_allowed,
+                SUM(CAST(COALESCE(p.p_r, '0') AS INTEGER)) AS runs_allowed,
+                SUM(CAST(COALESCE(p.p_er, '0') AS INTEGER)) AS earned_runs,
+                SUM(CAST(COALESCE(p.p_w, '0') AS INTEGER)) AS walks,
+                SUM(CAST(COALESCE(p.p_iw, '0') AS INTEGER)) AS intentional_walks,
+                SUM(CAST(COALESCE(p.p_hbp, '0') AS INTEGER)) AS hit_by_pitch,
+                SUM(CAST(COALESCE(p.p_sf, '0') AS INTEGER)) AS sacrifice_flies,
+                SUM(CAST(COALESCE(p.p_k, '0') AS INTEGER)) AS strikeouts,
+                SUM(CAST(COALESCE(p.wp, '0') AS INTEGER)) AS wins,
+                SUM(CAST(COALESCE(p.lp, '0') AS INTEGER)) AS losses,
+                SUM(CAST(COALESCE(p.save, '0') AS INTEGER)) AS saves
+            FROM retrosheet_pitching AS p
+            JOIN birthday_batter_games AS birthday_flags
+              ON birthday_flags.gid = p.gid
+             AND birthday_flags.team = p.opp
+            WHERE p.stattype = 'value'
+              AND p.gametype IN ('R', 'regular')
+            GROUP BY p.id
+        ){',' if extra_ctes else ''}
+        {extra_ctes}
+        SELECT
+            birthday_games.pitcher_id AS retro_id,
+            {name_expression} AS player_name,
+            birthday_games.first_season,
+            birthday_games.last_season,
+            birthday_games.games,
+            birthday_games.games_started,
+            birthday_games.ipouts,
+            birthday_games.plate_appearances,
+            birthday_games.at_bats,
+            birthday_games.hits,
+            birthday_games.doubles,
+            birthday_games.triples,
+            birthday_games.home_runs,
+            birthday_games.hits_allowed,
+            birthday_games.home_runs_allowed,
+            birthday_games.runs_allowed,
+            birthday_games.earned_runs,
+            birthday_games.walks,
+            birthday_games.intentional_walks,
+            birthday_games.hit_by_pitch,
+            birthday_games.sacrifice_flies,
+            birthday_games.strikeouts,
+            birthday_games.wins,
+            birthday_games.losses,
+            birthday_games.saves
+        FROM birthday_games
+        {joins_sql}
+        """,
+    ).fetchall()
+    return rank_birthday_pitching_game_line_rows(connection, rows, query)
+
+
+def rank_birthday_pitching_game_line_rows(connection, rows, query: BirthdayMatchupQuery) -> list[dict[str, Any]]:
+    season_start = min((safe_int(row["first_season"]) or 0) for row in rows) if rows else 0
+    season_end = max((safe_int(row["last_season"]) or 0) for row in rows) if rows else 0
+    fip_constant = compute_historical_fip_constant(connection, season_start, season_end) if season_start and season_end else None
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        ipouts = safe_int(row["ipouts"]) or 0
+        at_bats = max(safe_int(row["at_bats"]) or 0, 0)
+        walks = (safe_int(row["walks"]) or 0) + (safe_int(row["intentional_walks"]) or 0)
+        hits = safe_int(row["hits"]) or 0
+        doubles = safe_int(row["doubles"]) or 0
+        triples = safe_int(row["triples"]) or 0
+        home_runs = safe_int(row["home_runs"]) or 0
+        hit_by_pitch = safe_int(row["hit_by_pitch"]) or 0
+        sacrifice_flies = safe_int(row["sacrifice_flies"]) or 0
+        plate_appearances = safe_int(row["plate_appearances"]) or 0
+        singles = hits - doubles - triples - home_runs
+        avg = (hits / at_bats) if at_bats else None
+        obp_denom = at_bats + walks + hit_by_pitch + sacrifice_flies
+        obp = ((hits + walks + hit_by_pitch) / obp_denom) if obp_denom else None
+        slg = ((singles + (2 * doubles) + (3 * triples) + (4 * home_runs)) / at_bats) if at_bats else None
+        ops = (obp + slg) if obp is not None and slg is not None else None
+        metric_source = {
+            "games": safe_int(row["games"]) or 0,
+            "games_started": safe_int(row["games_started"]) or 0,
+            "wins": safe_int(row["wins"]) or 0,
+            "losses": safe_int(row["losses"]) or 0,
+            "saves": safe_int(row["saves"]) or 0,
+            "hits_allowed": safe_int(row["hits_allowed"]) or 0,
+            "earned_runs": safe_int(row["earned_runs"]) or 0,
+            "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
+            "walks": walks,
+            "strikeouts": safe_int(row["strikeouts"]) or 0,
+            "hit_by_pitch": hit_by_pitch,
+        }
+        if query.metric_key in PITCHING_GAME_LINE_CONTEXT_METRIC_KEYS:
+            metric_value = {
+                "ba": avg,
+                "obp": obp,
+                "slg": slg,
+                "ops": ops,
+                "plate_appearances": float(plate_appearances),
+                "at_bats": float(at_bats),
+                "hits": float(hits),
+                "doubles": float(doubles),
+                "triples": float(triples),
+                "home_runs": float(home_runs),
+                "walks": float(walks),
+                "strikeouts": float(safe_int(row["strikeouts"]) or 0),
+                "hit_by_pitch": float(hit_by_pitch),
+            }.get(query.metric_key)
+        elif query.metric_key == "innings":
+            metric_value = float(ipouts) / 3.0 if ipouts else None
+        else:
+            metric_value = select_historical_pitching_metric(query.metric_key, ipouts, metric_source, fip_constant=fip_constant)
+        if metric_value is None:
+            continue
+        sample_value = float(
+            {
+                "plate_appearances": plate_appearances,
+                "at_bats": at_bats,
+                "games": safe_int(row["games"]) or 0,
+                "games_started": safe_int(row["games_started"]) or 0,
+                "ipouts": ipouts,
+                "wins": safe_int(row["wins"]) or 0,
+                "losses": safe_int(row["losses"]) or 0,
+                "saves": safe_int(row["saves"]) or 0,
+                "walks": walks,
+                "strikeouts": safe_int(row["strikeouts"]) or 0,
+                "hits_allowed": safe_int(row["hits_allowed"]) or 0,
+                "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
+                "earned_runs": safe_int(row["earned_runs"]) or 0,
+            }.get(query.sample_basis or "games", 0.0)
+        )
+        if query.min_sample_size and sample_value < float(query.min_sample_size):
+            continue
+        candidates.append(
+            {
+                "player_name": str(row["player_name"] or row["retro_id"]),
+                "metric_value": float(metric_value),
+                "sample_size": sample_value,
+                "games": safe_int(row["games"]) or 0,
+                "condition_games": safe_int(row["games"]) or 0,
+                "games_started": safe_int(row["games_started"]) or 0,
+                "ipouts": ipouts,
+                "innings": outs_to_innings_notation(ipouts),
+                "plate_appearances": plate_appearances,
+                "at_bats": at_bats,
+                "hits": hits,
+                "doubles": doubles,
+                "triples": triples,
+                "home_runs": home_runs,
+                "hits_allowed": safe_int(row["hits_allowed"]) or 0,
+                "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
+                "runs_allowed": safe_int(row["runs_allowed"]) or 0,
+                "earned_runs": safe_int(row["earned_runs"]) or 0,
+                "walks": walks,
+                "intentional_walks": safe_int(row["intentional_walks"]) or 0,
+                "hit_by_pitch": hit_by_pitch,
+                "strikeouts": safe_int(row["strikeouts"]) or 0,
+                "wins": safe_int(row["wins"]) or 0,
+                "losses": safe_int(row["losses"]) or 0,
+                "saves": safe_int(row["saves"]) or 0,
+                "avg": avg,
+                "obp": obp,
+                "slg": slg,
+                "ops": ops,
+                "era": select_historical_pitching_metric("era", ipouts, metric_source),
+                "whip": select_historical_pitching_metric("whip", ipouts, metric_source),
+                "fip": select_historical_pitching_metric("fip", ipouts, metric_source, fip_constant=fip_constant),
+                "first_season": safe_int(row["first_season"]) or 0,
+                "last_season": safe_int(row["last_season"]) or 0,
+                "opponents_faced": safe_int(row["games"]) or 0,
+            }
+        )
+    candidates.sort(
+        key=lambda row: (
+            -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
+            -(row.get("sample_size") or 0.0),
+            int(row.get("last_season") or 0),
+            str(row.get("player_name") or ""),
+        )
+    )
+    for index, row in enumerate(candidates, start=1):
+        row["rank"] = index
+    return candidates[:5]
 
 
 def format_context_metric_value(metric_key: str, value: float) -> str:

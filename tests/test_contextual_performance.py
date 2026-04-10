@@ -475,16 +475,17 @@ def test_parse_birthday_matchup_query_for_hitter_ops_against_birthday_pitchers()
     assert query.supported is True
 
 
-def test_parse_birthday_matchup_query_marks_pitcher_era_as_unsupported() -> None:
+def test_parse_birthday_matchup_query_routes_pitcher_era_to_game_lines() -> None:
     query = parse_birthday_matchup_query(
         "Which pitcher has the lowest ERA when facing hitters on their birthday?"
     )
     assert query is not None
     assert query.subject_role == "pitcher"
     assert query.birthday_side == "batter"
-    assert query.metric_key is None
-    assert query.supported is False
+    assert query.metric_key == "era"
+    assert query.supported is True
     assert query.metric_label == "ERA"
+    assert query.source_mode == "pitching_game_lines"
 
 
 def test_aggregate_opponent_pitcher_chunk_tracks_birthday_flags() -> None:
@@ -622,10 +623,87 @@ def test_birthday_matchup_snippet_for_hitter_against_birthday_pitchers() -> None
     assert snippet.payload["leaders"][0]["player_name"] == "Birthday Slugger"
 
 
-def test_birthday_matchup_gap_for_pitcher_era_against_birthday_hitters() -> None:
+def test_birthday_matchup_snippet_for_pitcher_era_against_birthday_hitters() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     initialize_database(connection)
+    connection.execute(
+        """
+        CREATE TABLE lahman_people (
+            playerid TEXT,
+            retroid TEXT,
+            namefirst TEXT,
+            namelast TEXT,
+            birthmonth TEXT,
+            birthday TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_pitching (
+            id TEXT,
+            gid TEXT,
+            opp TEXT,
+            date TEXT,
+            stattype TEXT,
+            gametype TEXT,
+            p_gs TEXT,
+            p_ipouts TEXT,
+            p_bfp TEXT,
+            p_h TEXT,
+            p_d TEXT,
+            p_t TEXT,
+            p_hr TEXT,
+            p_r TEXT,
+            p_er TEXT,
+            p_w TEXT,
+            p_iw TEXT,
+            p_hbp TEXT,
+            p_sh TEXT,
+            p_sf TEXT,
+            p_k TEXT,
+            wp TEXT,
+            lp TEXT,
+            save TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE retrosheet_batting (
+            id TEXT,
+            gid TEXT,
+            team TEXT,
+            date TEXT,
+            stattype TEXT,
+            gametype TEXT
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO lahman_people VALUES (?,?,?,?,?,?)",
+        [
+            ("ace001", "ace001", "Birthday", "Ace", "1", "1"),
+            ("work001", "work001", "Worker", "Bee", "1", "1"),
+            ("bat001", "bat001", "Birthday", "Batter", "4", "10"),
+            ("bat002", "bat002", "Party", "Hitter", "4", "11"),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO retrosheet_pitching VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            ("ace001", "G1", "NYN", "20240410", "value", "regular", "1", "27", "30", "5", "1", "0", "1", "1", "1", "2", "0", "0", "0", "0", "8", "1", "0", "0"),
+            ("work001", "G2", "ATL", "20240411", "value", "regular", "1", "24", "28", "8", "2", "0", "1", "4", "4", "3", "0", "1", "0", "1", "5", "0", "1", "0"),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO retrosheet_batting VALUES (?,?,?,?,?,?)",
+        [
+            ("bat001", "G1", "NYN", "20240410", "value", "regular"),
+            ("bat002", "G2", "ATL", "20240411", "value", "regular"),
+        ],
+    )
     query = parse_birthday_matchup_query(
         "Which pitcher has the lowest ERA when facing hitters on their birthday?"
     )
@@ -633,4 +711,6 @@ def test_birthday_matchup_gap_for_pitcher_era_against_birthday_hitters() -> None
     connection.close()
     assert snippet is not None
     assert snippet.source == "Birthday Matchups"
-    assert "does not carry the outs and earned-run totals" in snippet.summary
+    assert snippet.payload["source_mode"] == "pitching_game_lines"
+    assert snippet.payload["leaders"][0]["player_name"] == "Birthday Ace"
+    assert abs(snippet.payload["leaders"][0]["era"] - 1.0) < 1e-9

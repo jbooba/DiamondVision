@@ -655,6 +655,16 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_retrosheet_batting_date_player
             ON retrosheet_batting (date, id, gametype, stattype);
+
+            CREATE INDEX IF NOT EXISTS idx_retrosheet_batting_gid_team
+            ON retrosheet_batting (gid, team, gametype, stattype, date);
+            """
+        )
+    if table_exists(connection, "retrosheet_pitching"):
+        connection.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_retrosheet_pitching_gid_opp
+            ON retrosheet_pitching (gid, opp, gametype, stattype, date, id);
             """
         )
     if table_exists(connection, "lahman_people"):
