@@ -192,6 +192,7 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
     if analysis_type == "season_metric_leaderboard":
         rows = payload.get("rows")
         metric_label = str(payload.get("metric") or "Metric")
+        secondary_metric_label = str(payload.get("secondary_metric") or "").strip()
         entity_scope = str(payload.get("entity_scope") or "player")
         role = str(payload.get("role") or "")
         source_family = str(payload.get("source_family") or "")
@@ -202,6 +203,11 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                     [
                         {"key": "team_name", "label": "Team", "align": "left"},
                         {"key": "metric_value", "label": metric_label, "align": "right"},
+                        *(
+                            [{"key": "secondary_metric_value", "label": secondary_metric_label, "align": "right"}]
+                            if secondary_metric_label
+                            else []
+                        ),
                         {"key": "games", "label": "G", "align": "right"},
                     ]
                 )
@@ -237,6 +243,11 @@ def build_snippet_display(snippet: EvidenceSnippet) -> dict[str, Any] | None:
                     {"key": "player_name", "label": "Player", "align": "left"},
                     {"key": "team", "label": "Team", "align": "left"},
                     {"key": "metric_value", "label": metric_label, "align": "right"},
+                    *(
+                        [{"key": "secondary_metric_value", "label": secondary_metric_label, "align": "right"}]
+                        if secondary_metric_label
+                        else []
+                    ),
                     {"key": "games", "label": "G", "align": "right"},
                 ]
             )

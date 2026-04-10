@@ -474,6 +474,21 @@ def test_statcast_history_pickoff_attempt_and_error_aliases_stay_distinct() -> N
     con.close()
 
 
+def test_compound_pitching_metric_query_uses_primary_and_secondary_metrics() -> None:
+    con = build_test_connection()
+    researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)
+    snippet = researcher.build_snippet(con, "which pitcher with the lowest ERA gave up the most HR last year?")
+    assert snippet is not None
+    assert snippet.payload["source_family"] == "historical"
+    assert snippet.payload["metric"] == "ERA"
+    assert snippet.payload["secondary_metric"] == "HR Allowed"
+    assert snippet.payload["rows"][0]["player_name"] == "Paula Pitcher"
+    assert round(snippet.payload["rows"][0]["metric_value"], 2) == 2.00
+    assert snippet.payload["rows"][0]["secondary_metric_value"] == 12
+    assert "primary ranking" in snippet.summary
+    con.close()
+
+
 def test_statcast_history_span_aggregation_builds() -> None:
     con = build_test_connection()
     researcher = SeasonMetricLeaderboardResearcher(TEST_SETTINGS)

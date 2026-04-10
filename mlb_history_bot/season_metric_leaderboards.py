@@ -16,7 +16,7 @@ from .provider_metrics import (
     ProviderMetricSpec,
 )
 from .pybaseball_adapter import load_team_ids
-from .query_intent import detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
+from .query_intent import RankingIntent, detect_ranking_intent, looks_like_leaderboard_question, mentions_current_scope
 from .query_utils import extract_minimum_qualifier, extract_referenced_season, extract_season_span
 from .storage import (
     STATCAST_HISTORY_BATTER_TABLE,
@@ -103,6 +103,10 @@ QUALIFIER_CLAUSE_PATTERN = re.compile(
     r"(?:starts?|gs|games?|plate\s+appearances|pa|at\s+bats|ab|innings|ip|home\s+runs?|hr|hits?|walks?|strikeouts?|outs?)\b",
     re.IGNORECASE,
 )
+LOCAL_RANKING_HINT_PATTERN = re.compile(
+    r"\b(?:the\s+)?(best|top|most|highest|leader|leaders|least|fewest|lowest|worst|bottom)\b",
+    re.IGNORECASE,
+)
 METRIC_NORMALIZATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -152,6 +156,34 @@ METRIC_NORMALIZATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.IGNORECASE,
         ),
         "home runs allowed per game",
+    ),
+    (
+        re.compile(
+            r"\bgave\s+up(?:\s+the\s+)?(most|least|fewest|highest|lowest)\s+home\s+runs?\b",
+            re.IGNORECASE,
+        ),
+        r"\1 home runs allowed",
+    ),
+    (
+        re.compile(
+            r"\bgave\s+up(?:\s+the\s+)?(most|least|fewest|highest|lowest)\s+hr\b",
+            re.IGNORECASE,
+        ),
+        r"\1 home runs allowed",
+    ),
+    (
+        re.compile(
+            r"\bgave\s+up\s+home\s+runs?\b",
+            re.IGNORECASE,
+        ),
+        "home runs allowed",
+    ),
+    (
+        re.compile(
+            r"\bgave\s+up\s+hr\b",
+            re.IGNORECASE,
+        ),
+        "home runs allowed",
     ),
 )
 TEAM_ROLE_HINT_WORDS = (" which team ", " what team ", " teams ", " team ")
@@ -462,6 +494,20 @@ class SeasonMetricQuery:
     aggregate_range: bool = False
     team_record_filter: str | None = None
     exclude_pitcher_only_hitters: bool = False
+    secondary_metric: SeasonMetricSpec | None = None
+    secondary_descriptor: str | None = None
+    secondary_sort_desc: bool | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class MetricTextMatch:
+    metric: SeasonMetricSpec
+    start: int
+    end: int
+    score: int
+    descriptor: str
+    sort_desc: bool
+    source: str
 
 
 SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
@@ -513,7 +559,7 @@ SEASON_METRICS: tuple[SeasonMetricSpec, ...] = (
     SeasonMetricSpec("strikeout_to_walk", "K/BB", ("k/bb", "strikeout to walk ratio", "strikeouts to walks"), "historical", "pitcher", "player", True, ".2f", "ipouts", 30),
     SeasonMetricSpec("hits_allowed", "Hits Allowed", ("hits allowed",), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
     SeasonMetricSpec("hits_allowed_per_game", "H/G Allowed", ("hits allowed per game", "h/g allowed"), "historical", "pitcher", "player", False, ".2f", "games", 10),
-    SeasonMetricSpec("home_runs_allowed", "HR Allowed", ("home runs allowed", "home run allowed"), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
+    SeasonMetricSpec("home_runs_allowed", "HR Allowed", ("home runs allowed", "home run allowed", "hr allowed", "homers allowed"), "historical", "pitcher", "player", False, ".0f", "ipouts", 30),
     SeasonMetricSpec("home_runs_allowed_per_game", "HR/G Allowed", ("home runs allowed per game", "hr/g allowed"), "historical", "pitcher", "player", False, ".2f", "games", 10),
     SeasonMetricSpec("games", "Games", ("games", "games played"), "historical", "fielder", "player", True, ".0f", "games", 10),
     SeasonMetricSpec("fielding_pct", "Fld%", ("fielding percentage", "fielding pct", "fielding"), "historical", "fielder", "player", True, ".3f", "games", 10),
@@ -655,6 +701,7 @@ class SeasonMetricLeaderboardResearcher:
                 "role": query.role,
                 "source_family": query.metric.source_family,
                 "team_filter": query.team_filter_name,
+                "secondary_metric": query.secondary_metric.label if query.secondary_metric is not None else None,
                 "rows": rows[:25],
             },
         )
@@ -662,13 +709,29 @@ class SeasonMetricLeaderboardResearcher:
 
 def parse_season_metric_query(connection, settings: Settings, catalog: MetricCatalog, question: str) -> SeasonMetricQuery | None:
     lowered = f" {question.lower()} "
-    metric_search_text = normalize_metric_search_text(strip_qualifier_clauses(lowered))
+    lowered_without_qualifiers = strip_qualifier_clauses(lowered)
+    metric_search_text = normalize_metric_search_text(lowered_without_qualifiers)
+    metric_match_text = normalize_metric_search_text(lowered_without_qualifiers, strip_ranking_words=False)
+    compound_metric_pair = find_compound_metric_matches(connection, metric_match_text)
     season_metric_match = find_scored_season_metric(metric_search_text)
     history_metric_match = find_scored_statcast_history_metric(connection, metric_search_text)
     metric = None
+    primary_descriptor = None
+    primary_sort_desc = None
+    secondary_metric = None
+    secondary_descriptor = None
+    secondary_sort_desc = None
     provider_group_preference = infer_group_preference(lowered)
     minimum_starts = extract_minimum_qualifier(question, ("start", "starts", "gs"))
-    if history_metric_match is not None and (
+    if compound_metric_pair is not None:
+        primary_match, secondary_match = compound_metric_pair
+        metric = primary_match.metric
+        primary_descriptor = primary_match.descriptor
+        primary_sort_desc = primary_match.sort_desc
+        secondary_metric = secondary_match.metric
+        secondary_descriptor = secondary_match.descriptor
+        secondary_sort_desc = secondary_match.sort_desc
+    elif history_metric_match is not None and (
         season_metric_match is None or history_metric_match[0] > season_metric_match[0]
     ):
         metric = history_metric_match[1]
@@ -687,7 +750,11 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
         return None
     if not looks_like_leaderboard_question(lowered):
         return None
-    ranking_intent = detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, fallback_label="leader")
+    ranking_intent = (
+        RankingIntent(descriptor=primary_descriptor or "leader", sort_desc=bool(primary_sort_desc), matched=True)
+        if primary_descriptor is not None and primary_sort_desc is not None
+        else detect_ranking_intent(lowered, higher_is_better=metric.higher_is_better, fallback_label="leader")
+    )
     if ranking_intent is None:
         return None
     current_season = settings.live_season or date.today().year
@@ -757,6 +824,9 @@ def parse_season_metric_query(connection, settings: Settings, catalog: MetricCat
             and role == "hitter"
             and any(token in lowered for token in EXPLICIT_HITTER_ENTITY_HINTS)
         ),
+        secondary_metric=secondary_metric,
+        secondary_descriptor=secondary_descriptor,
+        secondary_sort_desc=secondary_sort_desc,
     )
 
 
@@ -796,13 +866,135 @@ def strip_qualifier_clauses(lowered_question: str) -> str:
     return QUALIFIER_CLAUSE_PATTERN.sub(" ", lowered_question)
 
 
-def normalize_metric_search_text(lowered_question: str) -> str:
+def normalize_metric_search_text(lowered_question: str, *, strip_ranking_words: bool = True) -> str:
     normalized = lowered_question
     for pattern, replacement in METRIC_NORMALIZATION_PATTERNS:
         normalized = pattern.sub(f" {replacement} ", normalized)
-    normalized = re.sub(r"\bthe\s+(most|least|fewest|highest|lowest)\b", " ", normalized)
-    normalized = re.sub(r"\b(most|least|fewest|highest|lowest)\b", " ", normalized)
+    if strip_ranking_words:
+        normalized = re.sub(r"\bthe\s+(most|least|fewest|highest|lowest)\b", " ", normalized)
+        normalized = re.sub(r"\b(most|least|fewest|highest|lowest)\b", " ", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+def detect_local_metric_ranking(
+    lowered_question: str,
+    metric: SeasonMetricSpec,
+    *,
+    start: int,
+    end: int,
+) -> RankingIntent | None:
+    before_text = lowered_question[max(0, start - 24) : start]
+    before_matches = list(LOCAL_RANKING_HINT_PATTERN.finditer(before_text))
+    if before_matches:
+        nearest = before_matches[-1]
+        snippet = f"{before_text[nearest.start():]} {lowered_question[start:end]}"
+        ranking = detect_ranking_intent(snippet, higher_is_better=metric.higher_is_better, require_hint=True)
+        if ranking is not None:
+            return ranking
+    after_text = lowered_question[end : min(len(lowered_question), end + 16)]
+    after_match = LOCAL_RANKING_HINT_PATTERN.search(after_text)
+    if after_match:
+        snippet = f"{lowered_question[start:end]} {after_text[:after_match.end()]}"
+        ranking = detect_ranking_intent(snippet, higher_is_better=metric.higher_is_better, require_hint=True)
+        if ranking is not None:
+            return ranking
+    window_start = max(0, start - 20)
+    window_end = min(len(lowered_question), end + 4)
+    local_text = lowered_question[window_start:window_end]
+    return detect_ranking_intent(local_text, higher_is_better=metric.higher_is_better, require_hint=True)
+
+
+def collect_metric_text_matches(connection, lowered_question: str) -> list[MetricTextMatch]:
+    matches: list[MetricTextMatch] = []
+    for metric in SEASON_METRICS:
+        for alias in metric.aliases:
+            alias_lower = alias.lower().strip()
+            if not alias_lower:
+                continue
+            pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+            for match in re.finditer(pattern, lowered_question):
+                ranking = detect_local_metric_ranking(lowered_question, metric, start=match.start(), end=match.end())
+                if ranking is None:
+                    continue
+                score = len(alias_lower) + metric_match_bonus(metric, lowered_question)
+                matches.append(
+                    MetricTextMatch(
+                        metric=metric,
+                        start=match.start(),
+                        end=match.end(),
+                        score=score,
+                        descriptor=ranking.descriptor,
+                        sort_desc=ranking.sort_desc,
+                        source="season",
+                    )
+                )
+    for config in STATCAST_HISTORY_TABLE_CONFIG:
+        table_name = str(config["table_name"])
+        if not table_exists(connection, table_name):
+            continue
+        role = str(config["role"])
+        for column in list_table_columns(connection, table_name):
+            spec = build_statcast_history_metric_spec(column=column, table_name=table_name, role=role)
+            if spec is None:
+                continue
+            for alias in spec.aliases:
+                alias_lower = alias.lower().strip()
+                if not alias_lower:
+                    continue
+                pattern = rf"(?<![a-z0-9]){re.escape(alias_lower)}(?![a-z0-9])"
+                for match in re.finditer(pattern, lowered_question):
+                    ranking = detect_local_metric_ranking(lowered_question, spec, start=match.start(), end=match.end())
+                    if ranking is None:
+                        continue
+                    score = len(alias_lower) + metric_match_bonus(spec, lowered_question)
+                    matches.append(
+                        MetricTextMatch(
+                            metric=spec,
+                            start=match.start(),
+                            end=match.end(),
+                            score=score,
+                            descriptor=ranking.descriptor,
+                            sort_desc=ranking.sort_desc,
+                            source="statcast_history",
+                        )
+                    )
+    return matches
+
+
+def find_compound_metric_matches(connection, lowered_question: str) -> tuple[MetricTextMatch, MetricTextMatch] | None:
+    matches = collect_metric_text_matches(connection, lowered_question)
+    if len(matches) < 2:
+        return None
+    deduped: dict[tuple[str, str, int], MetricTextMatch] = {}
+    for match in matches:
+        key = (
+            match.metric.source_family,
+            match.metric.dynamic_value_column or match.metric.key,
+            match.start,
+        )
+        existing = deduped.get(key)
+        if existing is None or match.score > existing.score:
+            deduped[key] = match
+    ordered = sorted(deduped.values(), key=lambda item: (item.start, item.end))
+    best_pair: tuple[MetricTextMatch, MetricTextMatch] | None = None
+    best_score = -1
+    for index, first in enumerate(ordered):
+        for second in ordered[index + 1 :]:
+            if first.end > second.start:
+                continue
+            if first.metric.entity_scope != second.metric.entity_scope:
+                continue
+            if first.metric.role != second.metric.role:
+                continue
+            if first.metric.source_family != second.metric.source_family:
+                continue
+            if (first.metric.dynamic_value_column or first.metric.key) == (second.metric.dynamic_value_column or second.metric.key):
+                continue
+            pair_score = first.score + second.score
+            if pair_score > best_score:
+                best_score = pair_score
+                best_pair = (first, second)
+    return best_pair
 
 
 def metric_match_bonus(metric: SeasonMetricSpec, lowered_question: str) -> int:
@@ -1643,38 +1835,38 @@ def fetch_historical_hitter_rows(connection, query: SeasonMetricQuery) -> list[d
         if metric_value is None:
             continue
         scope_start, scope_end, scope_text = row_scope(row)
-        candidates.append(
-            {
-                "season": scope_end,
-                "scope_label": scope_text,
-                "scope_start_season": scope_start,
-                "scope_end_season": scope_end,
-                "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
-                "team": str(row["team"] or ""),
-                "metric_value": float(metric_value),
-                "sample_size": plate_appearances,
-                "games": safe_int(row["games"]) or 0,
-                "plate_appearances": plate_appearances,
-                "at_bats": at_bats,
-                "runs": safe_int(row["runs"]) or 0,
-                "avg": avg,
-                "obp": obp,
-                "slg": slg,
-                "ops": ops,
-                "singles": singles,
-                "doubles": doubles,
-                "triples": triples,
-                "total_bases": total_bases,
-                "extra_base_hits": extra_base_hits,
-                "home_runs": home_runs,
-                "hits": hits,
-                "steals": safe_int(row["steals"]) or 0,
-                "hit_by_pitch": hit_by_pitch,
-                "runs_batted_in": safe_int(row["rbi"]) or 0,
-                "walks": walks,
-                "strikeouts": safe_int(row["strikeouts"]) or 0,
-            }
-        )
+        candidate = {
+            "season": scope_end,
+            "scope_label": scope_text,
+            "scope_start_season": scope_start,
+            "scope_end_season": scope_end,
+            "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
+            "team": str(row["team"] or ""),
+            "metric_value": float(metric_value),
+            "sample_size": plate_appearances,
+            "games": safe_int(row["games"]) or 0,
+            "plate_appearances": plate_appearances,
+            "at_bats": at_bats,
+            "runs": safe_int(row["runs"]) or 0,
+            "avg": avg,
+            "obp": obp,
+            "slg": slg,
+            "ops": ops,
+            "singles": singles,
+            "doubles": doubles,
+            "triples": triples,
+            "total_bases": total_bases,
+            "extra_base_hits": extra_base_hits,
+            "home_runs": home_runs,
+            "hits": hits,
+            "steals": safe_int(row["steals"]) or 0,
+            "hit_by_pitch": hit_by_pitch,
+            "runs_batted_in": safe_int(row["rbi"]) or 0,
+            "walks": walks,
+            "strikeouts": safe_int(row["strikeouts"]) or 0,
+        }
+        attach_secondary_metric_value(candidate, query)
+        candidates.append(candidate)
     return rank_rows(candidates, query)
 
 
@@ -1767,38 +1959,38 @@ def fetch_historical_pitcher_rows(connection, query: SeasonMetricQuery) -> list[
         hits_allowed = safe_int(row["hits_allowed"]) or 0
         walks = safe_int(row["walks"]) or 0
         scope_start, scope_end, scope_text = row_scope(row)
-        candidates.append(
-            {
-                "season": scope_end,
-                "scope_label": scope_text,
-                "scope_start_season": scope_start,
-                "scope_end_season": scope_end,
-                "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
-                "team": str(row["team"] or ""),
-                "metric_value": float(metric_value),
-                "sample_size": ipouts,
-                "games": safe_int(row["games"]) or 0,
-                "innings": outs_to_innings_notation(ipouts),
-                "games_started": games_started,
-                "era": (27.0 * (safe_int(row["earned_runs"]) or 0) / ipouts) if ipouts else None,
-                "whip": ((hits_allowed + walks) / (ipouts / 3.0)) if ipouts else None,
-                "fip": metric_value if query.metric.key == "fip" else select_historical_pitching_metric("fip", ipouts, row, fip_constant=fip_constant),
-                "wins": safe_int(row["wins"]) or 0,
-                "losses": safe_int(row["losses"]) or 0,
-                "saves": safe_int(row["saves"]) or 0,
-                "hits_allowed": hits_allowed,
-                "earned_runs": safe_int(row["earned_runs"]) or 0,
-                "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
-                "hit_by_pitch": safe_int(row["hit_by_pitch"]) or 0,
-                "walks": walks,
-                "strikeouts": safe_int(row["strikeouts"]) or 0,
-                "strikeouts_per_9": ((27.0 * (safe_int(row["strikeouts"]) or 0)) / ipouts) if ipouts else None,
-                "walks_per_9": ((27.0 * walks) / ipouts) if ipouts else None,
-                "hits_per_9": ((27.0 * hits_allowed) / ipouts) if ipouts else None,
-                "home_runs_per_9": ((27.0 * (safe_int(row["home_runs_allowed"]) or 0)) / ipouts) if ipouts else None,
-                "strikeout_to_walk": ((safe_int(row["strikeouts"]) or 0) / walks) if walks else None,
-            }
-        )
+        candidate = {
+            "season": scope_end,
+            "scope_label": scope_text,
+            "scope_start_season": scope_start,
+            "scope_end_season": scope_end,
+            "player_name": build_person_name(row["namefirst"], row["namelast"], row["playerid"]),
+            "team": str(row["team"] or ""),
+            "metric_value": float(metric_value),
+            "sample_size": ipouts,
+            "games": safe_int(row["games"]) or 0,
+            "innings": outs_to_innings_notation(ipouts),
+            "games_started": games_started,
+            "era": (27.0 * (safe_int(row["earned_runs"]) or 0) / ipouts) if ipouts else None,
+            "whip": ((hits_allowed + walks) / (ipouts / 3.0)) if ipouts else None,
+            "fip": metric_value if query.metric.key == "fip" else select_historical_pitching_metric("fip", ipouts, row, fip_constant=fip_constant),
+            "wins": safe_int(row["wins"]) or 0,
+            "losses": safe_int(row["losses"]) or 0,
+            "saves": safe_int(row["saves"]) or 0,
+            "hits_allowed": hits_allowed,
+            "earned_runs": safe_int(row["earned_runs"]) or 0,
+            "home_runs_allowed": safe_int(row["home_runs_allowed"]) or 0,
+            "hit_by_pitch": safe_int(row["hit_by_pitch"]) or 0,
+            "walks": walks,
+            "strikeouts": safe_int(row["strikeouts"]) or 0,
+            "strikeouts_per_9": ((27.0 * (safe_int(row["strikeouts"]) or 0)) / ipouts) if ipouts else None,
+            "walks_per_9": ((27.0 * walks) / ipouts) if ipouts else None,
+            "hits_per_9": ((27.0 * hits_allowed) / ipouts) if ipouts else None,
+            "home_runs_per_9": ((27.0 * (safe_int(row["home_runs_allowed"]) or 0)) / ipouts) if ipouts else None,
+            "strikeout_to_walk": ((safe_int(row["strikeouts"]) or 0) / walks) if walks else None,
+        }
+        attach_secondary_metric_value(candidate, query)
+        candidates.append(candidate)
     return rank_rows(candidates, query)
 
 
@@ -2108,6 +2300,11 @@ def fetch_statcast_history_rows(connection, query: SeasonMetricQuery) -> list[di
         if not passes_sample_threshold(query.metric, values):
             continue
         candidate = build_statcast_history_row_payload(row, query, metric_value=float(metric_value))
+        if query.secondary_metric is not None and query.secondary_metric.dynamic_value_column:
+            secondary_value = safe_float(row[query.secondary_metric.dynamic_value_column])
+            if secondary_value is not None:
+                candidate["secondary_metric_value"] = float(secondary_value)
+                candidate["secondary_metric_label"] = query.secondary_metric.label
         candidates.append(candidate)
     return rank_rows(candidates, query)
 
@@ -2184,6 +2381,7 @@ def build_aggregated_statcast_history_rows(rows: list[Any], query: SeasonMetricQ
         }
         if weight_column:
             row_payload[weight_column] = values.get(weight_column)
+        attach_secondary_metric_value(row_payload, query)
         candidates.append(row_payload)
     return candidates
 
@@ -2305,6 +2503,74 @@ def infer_statcast_history_sample_size(
     if sample_basis and values.get(sample_basis) is not None:
         return float(values[sample_basis] or 0.0)
     return float(metric_value)
+
+
+def extract_secondary_metric_from_row(metric: SeasonMetricSpec, row: dict[str, Any]) -> float | None:
+    key = metric.key
+    direct = row.get(key)
+    direct_value = safe_float(direct)
+    if direct_value is not None:
+        return float(direct_value)
+    if key == "rbi":
+        return safe_float(row.get("runs_batted_in"))
+    if key == "runs_per_game":
+        runs = safe_float(row.get("runs"))
+        games = safe_float(row.get("games"))
+        return (float(runs) / float(games)) if runs is not None and games not in {None, 0} else None
+    if key == "rbi_per_game":
+        rbi = safe_float(row.get("runs_batted_in"))
+        games = safe_float(row.get("games"))
+        return (float(rbi) / float(games)) if rbi is not None and games not in {None, 0} else None
+    if key == "walks_per_game":
+        walks = safe_float(row.get("walks"))
+        games = safe_float(row.get("games"))
+        return (float(walks) / float(games)) if walks is not None and games not in {None, 0} else None
+    if key == "strikeouts_per_game":
+        strikeouts = safe_float(row.get("strikeouts"))
+        games = safe_float(row.get("games"))
+        return (float(strikeouts) / float(games)) if strikeouts is not None and games not in {None, 0} else None
+    if key == "hits_per_game":
+        hits = safe_float(row.get("hits"))
+        games = safe_float(row.get("games"))
+        return (float(hits) / float(games)) if hits is not None and games not in {None, 0} else None
+    if key == "home_runs_per_game":
+        home_runs = safe_float(row.get("home_runs"))
+        games = safe_float(row.get("games"))
+        return (float(home_runs) / float(games)) if home_runs is not None and games not in {None, 0} else None
+    if key == "earned_runs_per_game":
+        earned_runs = safe_float(row.get("earned_runs"))
+        games = safe_float(row.get("games"))
+        return (float(earned_runs) / float(games)) if earned_runs is not None and games not in {None, 0} else None
+    if key == "hits_allowed_per_game":
+        hits_allowed = safe_float(row.get("hits_allowed"))
+        games = safe_float(row.get("games"))
+        return (float(hits_allowed) / float(games)) if hits_allowed is not None and games not in {None, 0} else None
+    if key == "home_runs_allowed_per_game":
+        home_runs_allowed = safe_float(row.get("home_runs_allowed"))
+        games = safe_float(row.get("games"))
+        return (float(home_runs_allowed) / float(games)) if home_runs_allowed is not None and games not in {None, 0} else None
+    secondary_column = metric.dynamic_value_column
+    if secondary_column:
+        for candidate_key in (
+            secondary_column,
+            secondary_column.removeprefix("b_"),
+            secondary_column.removeprefix("p_"),
+            secondary_column.removeprefix("r_"),
+        ):
+            value = safe_float(row.get(candidate_key))
+            if value is not None:
+                return float(value)
+    return None
+
+
+def attach_secondary_metric_value(row: dict[str, Any], query: SeasonMetricQuery) -> None:
+    if query.secondary_metric is None:
+        return
+    secondary_value = extract_secondary_metric_from_row(query.secondary_metric, row)
+    if secondary_value is None:
+        return
+    row["secondary_metric_value"] = float(secondary_value)
+    row["secondary_metric_label"] = query.secondary_metric.label
 
 
 def format_statcast_history_player_name(value: Any) -> str:
@@ -2759,6 +3025,15 @@ def rank_rows(rows: list[dict[str, Any]], query: SeasonMetricQuery) -> list[dict
     rows.sort(
         key=lambda row: (
             -float(row["metric_value"]) if query.sort_desc else float(row["metric_value"]),
+            (
+                -float(row["secondary_metric_value"])
+                if query.secondary_metric is not None and query.secondary_sort_desc and row.get("secondary_metric_value") is not None
+                else (
+                    float(row["secondary_metric_value"])
+                    if query.secondary_metric is not None and row.get("secondary_metric_value") is not None
+                    else (float("-inf") if query.secondary_metric is not None and query.secondary_sort_desc else float("inf"))
+                )
+            ),
             -(row.get("sample_size") or 0.0),
             int(row.get("scope_end_season") or row.get("season") or 0),
             str(row.get("player_name") or row.get("team_name") or ""),
@@ -2778,10 +3053,23 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
     subject_phrase = "team" if query.entity_scope == "team" else query.role
     leader_scope = str(leader.get("scope_label") or leader.get("season") or "")
     scope_parenthetical = f" ({leader_scope})" if leader_scope and not query.aggregate_range else ""
-    summary = (
-        f"For {query.scope_label}{filter_text}{record_filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
-        f"is {subject_label}{scope_parenthetical} at {value_text}."
-    )
+    if query.secondary_metric is not None:
+        secondary_value = leader.get("secondary_metric_value")
+        secondary_text = (
+            f" {float(secondary_value):{query.secondary_metric.formatter}} {query.secondary_metric.label}"
+            if secondary_value is not None
+            else f" {query.secondary_metric.label} unavailable"
+        )
+        summary = (
+            f"For {query.scope_label}{filter_text}{record_filter_text}, using {query.metric.label} as the primary ranking and "
+            f"{query.secondary_metric.label} as the companion tiebreaker/context, the leading {subject_phrase} is "
+            f"{subject_label}{scope_parenthetical} at {value_text} {query.metric.label}{secondary_text}."
+        )
+    else:
+        summary = (
+            f"For {query.scope_label}{filter_text}{record_filter_text}, the {query.descriptor} {subject_phrase} by {query.metric.label} "
+            f"is {subject_label}{scope_parenthetical} at {value_text}."
+        )
     trailing = rows[1:4]
     if trailing:
         parts: list[str] = []
@@ -2789,9 +3077,15 @@ def build_season_metric_summary(query: SeasonMetricQuery, rows: list[dict[str, A
             row_label = row.get("player_name") or row.get("team_name") or "Unknown"
             row_scope = row.get("scope_label") or row.get("season")
             row_scope_text = f" ({row_scope})" if row_scope and not query.aggregate_range else ""
-            parts.append(
-                f"{row_label}{row_scope_text} {float(row['metric_value']):{query.metric.formatter}}"
-            )
+            if query.secondary_metric is not None and row.get("secondary_metric_value") is not None:
+                parts.append(
+                    f"{row_label}{row_scope_text} {float(row['metric_value']):{query.metric.formatter}} {query.metric.label}, "
+                    f"{float(row['secondary_metric_value']):{query.secondary_metric.formatter}} {query.secondary_metric.label}"
+                )
+            else:
+                parts.append(
+                    f"{row_label}{row_scope_text} {float(row['metric_value']):{query.metric.formatter}}"
+                )
         summary = f"{summary} Next on the board: " + "; ".join(parts) + "."
     return summary
 
