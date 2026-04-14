@@ -57,3 +57,45 @@ def test_sync_retrosheet_play_warehouse_imports_raw_play_rows(tmp_path: Path) ->
         assert get_metadata_value(connection, "retrosheet_play_warehouse_imported_at") is not None
     finally:
         connection.close()
+
+
+def test_sync_retrosheet_play_warehouse_avoids_large_text_indexes(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    retrosheet_dir = raw_dir / "retrosheet"
+    sabr_dir = raw_dir / "sabr"
+
+    retrosheet_dir.mkdir(parents=True)
+    processed_dir.mkdir(parents=True)
+    sabr_dir.mkdir(parents=True)
+
+    _write_csv(
+        retrosheet_dir / "plays.csv",
+        "gid,date,batter,pitcher,batteam,event,play,pitch_seq,count,gametype",
+        ["game1,20250401,judgea001,skubt001,NYA,home_run,HR/F9,CCBFX,2-2,regular"],
+    )
+
+    settings = Settings(
+        project_root=Path(__file__).resolve().parent.parent,
+        raw_data_dir=raw_dir,
+        processed_data_dir=processed_dir,
+        database_path=processed_dir / "mlb_history.sqlite3",
+        sabr_docs_dir=sabr_dir,
+        openai_model="gpt-5.4",
+        openai_reasoning_effort="medium",
+        live_season=None,
+        user_agent="test-agent",
+        fielding_bible_api_base="https://example.com",
+        fielding_bible_start_season=2003,
+    )
+
+    sync_retrosheet_play_warehouse(settings, retrosheet_dir=retrosheet_dir)
+
+    connection = get_connection(settings.database_path)
+    try:
+        indexes = [row[1] for row in connection.execute("PRAGMA index_list(retrosheet_plays)").fetchall()]
+        joined = " ".join(indexes).lower()
+        assert "pitch_seq" not in joined
+        assert "play" not in joined
+    finally:
+        connection.close()

@@ -899,7 +899,9 @@ def import_retrosheet_plays_stream(
         if close_wrapper:
             text_stream.detach()
 
-    _create_common_indexes(connection, table_name)
+    # The raw Retrosheet play warehouse is intentionally verbose and large.
+    # Avoid the generic index helper here so we do not accidentally create
+    # broad text indexes that materially inflate storage with little benefit.
     _create_retrosheet_play_indexes(connection, table_name)
     connection.execute(
         """
@@ -1022,8 +1024,6 @@ def _create_retrosheet_play_indexes(connection: sqlite3.Connection, table_name: 
         ("event", "date"),
         ("inning", "date"),
         ("count", "date"),
-        ("pitch_seq",),
-        ("play",),
     )
     for index_number, candidates in enumerate(candidate_sets, start=1):
         chosen = [lower_columns[candidate] for candidate in candidates if candidate in lower_columns]

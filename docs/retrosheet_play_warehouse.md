@@ -45,3 +45,4 @@ python -m mlb_history_bot ingest --retrosheet-dir /tmp/mlb_raw/retrosheet --with
 - The import is intentionally explicit because the raw warehouse can be large.
 - The app still uses the existing compact Retrosheet tables for many fast historical queries.
 - This warehouse is the foundation for broader historical pitch-sequence, event-context, and arbitrary condition queries.
+- The warehouse intentionally avoids indexing giant raw text fields like full play descriptions and pitch-sequence strings, because those indexes can explode SQLite volume usage.
