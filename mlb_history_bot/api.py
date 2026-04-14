@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from .chat import BaseballChatbot
 from .config import Settings
 from .models import EvidenceSnippet
+from .storage import RETROSHEET_PLAYS_TABLE, get_connection, get_metadata_value, table_exists
 
 
 class ChatRequest(BaseModel):
@@ -29,11 +30,30 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         size = settings.database_path.stat().st_size if settings.database_path.exists() else 0
+        retrosheet_play_warehouse_exists = False
+        retrosheet_play_warehouse_rows = 0
+        retrosheet_play_warehouse_imported_at: str | None = None
+        if settings.database_path.exists():
+            connection = get_connection(settings.database_path)
+            try:
+                retrosheet_play_warehouse_exists = table_exists(connection, RETROSHEET_PLAYS_TABLE)
+                if retrosheet_play_warehouse_exists:
+                    row_value = get_metadata_value(connection, "retrosheet_play_warehouse_rows") or "0"
+                    retrosheet_play_warehouse_rows = int(row_value)
+                    retrosheet_play_warehouse_imported_at = get_metadata_value(
+                        connection,
+                        "retrosheet_play_warehouse_imported_at",
+                    )
+            finally:
+                connection.close()
         return {
             "ok": True,
             "database_path": str(settings.database_path),
             "database_exists": settings.database_path.exists(),
             "database_size_bytes": size,
+            "retrosheet_play_warehouse_exists": retrosheet_play_warehouse_exists,
+            "retrosheet_play_warehouse_rows": retrosheet_play_warehouse_rows,
+            "retrosheet_play_warehouse_imported_at": retrosheet_play_warehouse_imported_at,
         }
 
     @app.post("/chat")

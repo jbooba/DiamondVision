@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterable
+from io import TextIOBase, TextIOWrapper
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from .metrics import MetricCatalog, MetricDefinition
 
 STATCAST_HISTORY_BATTER_TABLE = "statcast_history_batter_seasons"
 STATCAST_HISTORY_PITCHER_TABLE = "statcast_history_pitcher_seasons"
+RETROSHEET_PLAYS_TABLE = "retrosheet_plays"
 
 
 def get_connection(database_path: Path) -> sqlite3.Connection:
@@ -667,6 +669,8 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             ON retrosheet_pitching (gid, opp, gametype, stattype, date, id);
             """
         )
+    if table_exists(connection, RETROSHEET_PLAYS_TABLE):
+        _create_retrosheet_play_indexes(connection, RETROSHEET_PLAYS_TABLE)
     if table_exists(connection, "lahman_people"):
         people_columns = list_table_columns(connection, "lahman_people")
         if {"retroid", "birthmonth", "birthday"}.issubset(people_columns):
@@ -846,6 +850,90 @@ def import_csv_file(
     return row_count
 
 
+def import_retrosheet_plays_stream(
+    connection: sqlite3.Connection,
+    stream: Any,
+    *,
+    table_name: str = RETROSHEET_PLAYS_TABLE,
+    source_name: str = "retrosheet",
+    dataset_name: str = "plays.csv",
+    notes: str = "",
+    batch_size: int = 5000,
+) -> int:
+    initialize_database(connection)
+    close_wrapper = False
+    text_stream: TextIOBase
+    if isinstance(stream, TextIOBase):
+        text_stream = stream
+    else:
+        text_stream = TextIOWrapper(stream, encoding="utf-8-sig", newline="")
+        close_wrapper = True
+    try:
+        reader = csv.DictReader(text_stream)
+        if not reader.fieldnames:
+            raise ValueError(f"{dataset_name} has no header row")
+        original_headers = [header or "" for header in reader.fieldnames]
+        headers = _sanitize_headers(original_headers)
+        connection.execute(f"DROP TABLE IF EXISTS {quote_identifier(table_name)}")
+        column_sql = ", ".join(f"{quote_identifier(header)} TEXT" for header in headers)
+        connection.execute(f"CREATE TABLE {quote_identifier(table_name)} ({column_sql})")
+
+        row_count = 0
+        batch: list[tuple[Any, ...]] = []
+        placeholders = ", ".join("?" for _ in headers)
+        insert_sql = (
+            f"INSERT INTO {quote_identifier(table_name)} "
+            f"({', '.join(quote_identifier(header) for header in headers)}) "
+            f"VALUES ({placeholders})"
+        )
+        for row in reader:
+            normalized = tuple((row.get(header_name) or "").strip() for header_name in original_headers)
+            batch.append(normalized)
+            row_count += 1
+            if len(batch) >= batch_size:
+                connection.executemany(insert_sql, batch)
+                batch.clear()
+        if batch:
+            connection.executemany(insert_sql, batch)
+    finally:
+        if close_wrapper:
+            text_stream.detach()
+
+    _create_common_indexes(connection, table_name)
+    _create_retrosheet_play_indexes(connection, table_name)
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO csv_manifests (
+            source_name,
+            dataset_name,
+            table_name,
+            columns_json,
+            row_count,
+            notes
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (source_name, dataset_name, table_name, json.dumps(headers), row_count, notes),
+    )
+    connection.execute(
+        """
+        INSERT INTO metadata (key, value)
+        VALUES (?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = CURRENT_TIMESTAMP
+        """,
+        ("retrosheet_play_warehouse_imported_at",),
+    )
+    connection.execute(
+        """
+        INSERT INTO metadata (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        ("retrosheet_play_warehouse_rows", str(row_count)),
+    )
+    connection.commit()
+    return row_count
+
+
 def import_statcast_history_exports(
     connection: sqlite3.Connection,
     *,
@@ -911,6 +999,35 @@ def _create_common_indexes(connection: sqlite3.Connection, table_name: str) -> N
     for index_number, candidates in enumerate(candidate_sets, start=1):
         chosen = [lower_columns[candidate] for candidate in candidates if candidate in lower_columns]
         if not chosen:
+            continue
+        index_name = normalize_identifier(f"idx_{table_name}_{'_'.join(chosen)}_{index_number}")
+        columns_sql = ", ".join(quote_identifier(column) for column in chosen)
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {quote_identifier(index_name)} "
+            f"ON {quote_identifier(table_name)} ({columns_sql})"
+        )
+
+
+def _create_retrosheet_play_indexes(connection: sqlite3.Connection, table_name: str) -> None:
+    columns = list_table_columns(connection, table_name)
+    lower_columns = {column.lower(): column for column in columns}
+    candidate_sets = (
+        ("gid",),
+        ("date",),
+        ("gametype", "date"),
+        ("batter", "date"),
+        ("pitcher", "date"),
+        ("batter", "pitcher"),
+        ("batteam", "date"),
+        ("event", "date"),
+        ("inning", "date"),
+        ("count", "date"),
+        ("pitch_seq",),
+        ("play",),
+    )
+    for index_number, candidates in enumerate(candidate_sets, start=1):
+        chosen = [lower_columns[candidate] for candidate in candidates if candidate in lower_columns]
+        if len(chosen) != len(candidates):
             continue
         index_name = normalize_identifier(f"idx_{table_name}_{'_'.join(chosen)}_{index_number}")
         columns_sql = ", ".join(quote_identifier(column) for column in chosen)

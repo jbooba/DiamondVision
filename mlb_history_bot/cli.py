@@ -14,15 +14,19 @@ from .contextual_performance import (
 )
 from .fielding_bible import snapshot_current_drs_leaderboards, sync_fielding_bible_data
 from .ingest import ingest_project_data
+from .retrosheet_play_warehouse import sync_retrosheet_play_warehouse
 from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
 from .statcast_sync import sync_statcast_data
 from .storage import (
+    RETROSHEET_PLAYS_TABLE,
     STATCAST_HISTORY_BATTER_TABLE,
     STATCAST_HISTORY_PITCHER_TABLE,
     audit_statcast_history_table,
     get_connection,
+    get_metadata_value,
     import_statcast_history_exports,
+    table_exists,
 )
 
 
@@ -51,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--retrosheet-context-chunk-size", type=int, default=250000)
     prepare_parser.add_argument("--with-retrosheet-streaks", action="store_true")
     prepare_parser.add_argument("--retrosheet-streak-chunk-size", type=int, default=250000)
+    prepare_parser.add_argument("--with-retrosheet-play-warehouse", action="store_true")
+    prepare_parser.add_argument("--retrosheet-play-batch-size", type=int, default=5000)
 
     bootstrap_parser = subparsers.add_parser("bootstrap", help="Download Lahman and Retrosheet core files")
     bootstrap_parser.add_argument("--include-retrosheet-plays", action="store_true")
@@ -77,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--retrosheet-context-chunk-size", type=int, default=250000)
     ingest_parser.add_argument("--with-retrosheet-streaks", action="store_true")
     ingest_parser.add_argument("--retrosheet-streak-chunk-size", type=int, default=250000)
+    ingest_parser.add_argument("--with-retrosheet-play-warehouse", action="store_true")
+    ingest_parser.add_argument("--retrosheet-play-batch-size", type=int, default=5000)
 
     sync_drs_parser = subparsers.add_parser("sync-drs", help="Sync exact Fielding Bible/SIS DRS datasets")
     sync_drs_parser.add_argument("--start-season", type=int)
@@ -186,6 +194,13 @@ def build_parser() -> argparse.ArgumentParser:
     retrosheet_streak_parser.add_argument("--retrosheet-dir", type=Path)
     retrosheet_streak_parser.add_argument("--chunk-size", type=int, default=250000)
 
+    retrosheet_play_warehouse_parser = subparsers.add_parser(
+        "sync-retrosheet-play-warehouse",
+        help="Import full raw Retrosheet plays.csv into SQLite for verbose historical event research",
+    )
+    retrosheet_play_warehouse_parser.add_argument("--retrosheet-dir", type=Path)
+    retrosheet_play_warehouse_parser.add_argument("--batch-size", type=int, default=5000)
+
     ask_parser = subparsers.add_parser("ask", help="Ask one question")
     ask_parser.add_argument("question", type=str)
     ask_parser.add_argument("--session-id", type=str)
@@ -211,6 +226,7 @@ def main() -> int:
                 or args.with_retrosheet_splits
                 or args.with_retrosheet_counts
                 or args.with_retrosheet_streaks
+                or args.with_retrosheet_play_warehouse
             ),
         )
         messages = ingest_project_data(
@@ -236,6 +252,8 @@ def main() -> int:
             retrosheet_context_chunk_size=args.retrosheet_context_chunk_size,
             include_retrosheet_streaks=args.with_retrosheet_streaks,
             retrosheet_streak_chunk_size=args.retrosheet_streak_chunk_size,
+            include_retrosheet_play_warehouse=args.with_retrosheet_play_warehouse,
+            retrosheet_play_batch_size=args.retrosheet_play_batch_size,
         )
         for message in messages:
             print(message)
@@ -271,6 +289,8 @@ def main() -> int:
             retrosheet_context_chunk_size=args.retrosheet_context_chunk_size,
             include_retrosheet_streaks=args.with_retrosheet_streaks,
             retrosheet_streak_chunk_size=args.retrosheet_streak_chunk_size,
+            include_retrosheet_play_warehouse=args.with_retrosheet_play_warehouse,
+            retrosheet_play_batch_size=args.retrosheet_play_batch_size,
         )
         for message in messages:
             print(message)
@@ -466,6 +486,26 @@ def main() -> int:
         )
         for message in messages:
             print(message)
+        return 0
+
+    if args.command == "sync-retrosheet-play-warehouse":
+        messages = sync_retrosheet_play_warehouse(
+            settings,
+            retrosheet_dir=args.retrosheet_dir or settings.raw_data_dir / "retrosheet",
+            batch_size=args.batch_size,
+        )
+        for message in messages:
+            print(message)
+        connection = get_connection(settings.database_path)
+        try:
+            if table_exists(connection, RETROSHEET_PLAYS_TABLE):
+                row_count = get_metadata_value(connection, "retrosheet_play_warehouse_rows") or "0"
+                imported_at = get_metadata_value(connection, "retrosheet_play_warehouse_imported_at") or ""
+                print(f"{RETROSHEET_PLAYS_TABLE}: {row_count} rows")
+                if imported_at:
+                    print(f"imported_at: {imported_at}")
+        finally:
+            connection.close()
         return 0
 
     if args.command == "ask":
