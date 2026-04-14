@@ -9,9 +9,9 @@ Primary imported tables:
 
 Current imported totals:
 
-- Batter-season queryable metrics: `176`
-- Pitcher-season queryable metrics: `299`
-- Total queryable imported metrics: `475`
+- Batter-season queryable metrics: `193`
+- Pitcher-season queryable metrics: `316`
+- Total queryable imported metrics: `509`
 
 Status legend:
 

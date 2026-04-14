@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .bootstrap import bootstrap_datasets
@@ -17,6 +18,7 @@ from .ingest import ingest_project_data
 from .retrosheet_play_warehouse import sync_retrosheet_play_warehouse
 from .retrosheet_streaks import sync_retrosheet_player_streaks
 from .retrosheet_splits import sync_retrosheet_team_splits
+from .statcast_history_refresh import refresh_bundled_statcast_history
 from .statcast_sync import sync_statcast_data
 from .storage import (
     RETROSHEET_PLAYS_TABLE,
@@ -126,6 +128,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional override for the bundled CSV directory (defaults to data/statcast_history)",
     )
 
+    refresh_bundled_statcast_history_parser = subparsers.add_parser(
+        "refresh-bundled-statcast-history",
+        help="Fetch fresh bundled Statcast custom-history CSVs from Baseball Savant custom leaderboards",
+    )
+    refresh_bundled_statcast_history_parser.add_argument(
+        "--data-dir",
+        type=Path,
+        help="Optional override for the bundled CSV directory (defaults to data/statcast_history)",
+    )
+    refresh_bundled_statcast_history_parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help="Fetch the full Savant history window instead of only the current live season",
+    )
+    refresh_bundled_statcast_history_parser.add_argument(
+        "--season",
+        type=int,
+        help="Override the season to refresh (defaults to MLB_HISTORY_LIVE_SEASON or the current year)",
+    )
+
     audit_statcast_history_parser = subparsers.add_parser(
         "audit-statcast-history",
         help="Inspect imported Statcast custom-history coverage by table, year, and optional player",
@@ -157,6 +179,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-history",
         action="store_true",
         help="Skip importing bundled Statcast history CSVs after the daily sync finishes",
+    )
+    refresh_statcast_parser.add_argument(
+        "--fetch-history-from-savant",
+        action="store_true",
+        help="Refresh the bundled Statcast history CSVs from Savant before importing them",
+    )
+    refresh_statcast_parser.add_argument(
+        "--full-history-fetch",
+        action="store_true",
+        help="When fetching bundled Statcast history from Savant, pull full history instead of only the live season",
+    )
+    refresh_statcast_parser.add_argument(
+        "--history-season",
+        type=int,
+        help="Optional season override when fetching bundled Statcast history from Savant",
     )
 
     retrosheet_split_parser = subparsers.add_parser(
@@ -363,6 +400,19 @@ def main() -> int:
             print(message)
         return 0
 
+    if args.command == "refresh-bundled-statcast-history":
+        data_dir = args.data_dir or (settings.project_root / "data" / "statcast_history")
+        season = args.season or settings.live_season or datetime.now().year
+        messages = refresh_bundled_statcast_history(
+            data_dir=data_dir,
+            user_agent=settings.user_agent,
+            current_season=season,
+            full_history=args.full_history,
+        )
+        for message in messages:
+            print(message)
+        return 0
+
     if args.command == "refresh-statcast-daily":
         messages = sync_statcast_data(
             settings,
@@ -372,6 +422,16 @@ def main() -> int:
         )
         if not args.skip_history:
             data_dir = args.history_dir or (settings.project_root / "data" / "statcast_history")
+            if args.fetch_history_from_savant:
+                season = args.history_season or settings.live_season or datetime.now().year
+                messages.extend(
+                    refresh_bundled_statcast_history(
+                        data_dir=data_dir,
+                        user_agent=settings.user_agent,
+                        current_season=season,
+                        full_history=args.full_history_fetch,
+                    )
+                )
             batter_csv = data_dir / "Batter_Stats_Statcast_History.csv"
             pitcher_csv = data_dir / "Pitcher_Stats_Statcast_History.csv"
             if batter_csv.exists() or pitcher_csv.exists():

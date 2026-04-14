@@ -4,9 +4,9 @@ Generated from the imported Statcast custom-history tables used by DiamondVision
 
 ## Summary
 
-- Batter-season queryable metrics: `176`
-- Pitcher-season queryable metrics: `299`
-- Total queryable imported metrics: `475`
+- Batter-season queryable metrics: `193`
+- Pitcher-season queryable metrics: `316`
+- Total queryable imported metrics: `509`
 
 Sample basis notes:
 - `pa`: plate appearances
@@ -32,25 +32,25 @@ Sample basis notes:
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
-| average exit velocity | `exit_velocity_avg` | `batted_ball` | 1 | `.0f` |
-| average launch angle | `launch_angle_avg` | `batted_ball` | 1 | `.0f` |
+| average exit velocity | `exit_velocity_avg` | `batted_ball` | 10 | `.3f` |
+| average launch angle | `launch_angle_avg` | `batted_ball` | 10 | `.1f` |
 | bacon | `bacon` | `batted_ball` | 10 | `.2f` |
 | Barrel | `barrel` | `batted_ball` | 1 | `.0f` |
 | barrel rate | `barrel_batted_rate` | `batted_ball` | 1 | `.0f` |
-| Flareburner Percent | `flareburner_percent` | `batted_ball` | 10 | `.1f` |
-| Flyballs | `flyballs` | `batted_ball` | 1 | `.0f` |
-| Flyballs Percent | `flyballs_percent` | `batted_ball` | 10 | `.1f` |
-| Groundballs | `groundballs` | `batted_ball` | 1 | `.0f` |
-| Groundballs Percent | `groundballs_percent` | `batted_ball` | 10 | `.1f` |
+| Flare Burner Percent | `flareburner_percent` | `batted_ball` | 10 | `.1f` |
+| Fly Balls | `flyballs` | `batted_ball` | 1 | `.0f` |
+| Fly Balls Percent | `flyballs_percent` | `batted_ball` | 10 | `.1f` |
+| Ground Balls | `groundballs` | `batted_ball` | 1 | `.0f` |
+| Ground Balls Percent | `groundballs_percent` | `batted_ball` | 10 | `.1f` |
 | hard-hit rate | `hard_hit_percent` | `batted_ball` | 10 | `.1f` |
-| Linedrives | `linedrives` | `batted_ball` | 1 | `.0f` |
-| Linedrives Percent | `linedrives_percent` | `batted_ball` | 10 | `.1f` |
+| Line Drives | `linedrives` | `batted_ball` | 1 | `.0f` |
+| Line Drives Percent | `linedrives_percent` | `batted_ball` | 10 | `.1f` |
 | Opposite Percent | `opposite_percent` | `batted_ball` | 10 | `.1f` |
-| Poorlytopped Percent | `poorlytopped_percent` | `batted_ball` | 10 | `.1f` |
-| Poorlyunder Percent | `poorlyunder_percent` | `batted_ball` | 10 | `.1f` |
+| Poorly Topped Percent | `poorlytopped_percent` | `batted_ball` | 10 | `.1f` |
+| Poorly Under Percent | `poorlyunder_percent` | `batted_ball` | 10 | `.1f` |
 | Poorlyweak Percent | `poorlyweak_percent` | `batted_ball` | 10 | `.1f` |
-| Popups | `popups` | `batted_ball` | 1 | `.0f` |
-| Popups Percent | `popups_percent` | `batted_ball` | 10 | `.1f` |
+| Pop Ups | `popups` | `batted_ball` | 1 | `.0f` |
+| Pop Ups Percent | `popups_percent` | `batted_ball` | 10 | `.1f` |
 | Pull Percent | `pull_percent` | `batted_ball` | 10 | `.1f` |
 | Straightaway Percent | `straightaway_percent` | `batted_ball` | 10 | `.1f` |
 | sweet spot rate | `sweet_spot_percent` | `batted_ball` | 10 | `.1f` |
@@ -58,18 +58,20 @@ Sample basis notes:
 | xBAcon | `xbacon` | `batted_ball` | 10 | `.3f` |
 | xwOBAcon | `xwobacon` | `batted_ball` | 10 | `.3f` |
 
-### Other (`37`)
+### Other (`47`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
 | Ab | `ab` | `` | 1 | `.0f` |
-| Ab Scoring | `b_ab_scoring` | `` | 1 | `.0f` |
+| Ab Scoring | `b_ab_scoring` | `b_ab_scoring` | 1 | `.0f` |
 | Avg Best Speed | `avg_best_speed` | `` | 1 | `.1f` |
 | Avg Hyper Speed | `avg_hyper_speed` | `` | 1 | `.1f` |
 | bb percent | `bb_percent` | `pa` | 20 | `.1f` |
-| Catcher Interf | `b_catcher_interf` | `` | 1 | `.0f` |
-| Defensive Indiff | `r_defensive_indiff` | `` | 1 | `.0f` |
+| Catcher Interference | `b_catcher_interf` | `` | 1 | `.0f` |
+| Defensive Indifference | `r_defensive_indiff` | `` | 1 | `.0f` |
 | Exchange 2B 3B Sba | `exchange_2b_3b_sba` | `` | 1 | `.0f` |
+| F Bootup Distance | `f_bootup_distance` | `` | 1 | `.0f` |
+| Hp To 1B | `hp_to_1b` | `` | 1 | `.0f` |
 | Interference | `b_interference` | `` | 1 | `.0f` |
 | Interference | `r_interference` | `` | 1 | `.0f` |
 | k percent | `k_percent` | `pa` | 20 | `.1f` |
@@ -79,34 +81,44 @@ Sample basis notes:
 | N 3Star Percent | `n_3star_percent` | `` | 1 | `.1f` |
 | N 4Star Percent | `n_4star_percent` | `` | 1 | `.1f` |
 | N 5Star Percent | `n_5star_percent` | `` | 1 | `.1f` |
+| N Bolts | `n_bolts` | `` | 1 | `.0f` |
 | Pa | `pa` | `` | 1 | `.0f` |
 | Pitch Count | `pitch_count` | `pitch_count` | 1 | `.0f` |
 | Pitch Count Breaking | `pitch_count_breaking` | `pitch_count` | 1 | `.0f` |
 | Pitch Count Offspeed | `pitch_count_offspeed` | `pitch_count` | 1 | `.0f` |
 | Played Dh | `b_played_dh` | `` | 1 | `.0f` |
-| Pop 2B Cs | `pop_2b_cs` | `` | 1 | `.0f` |
-| Pop 2B Sb | `pop_2b_sb` | `` | 1 | `.0f` |
-| Pop 2B Sba | `pop_2b_sba` | `` | 1 | `.0f` |
-| Pop 2B Sba Count | `pop_2b_sba_count` | `` | 1 | `.0f` |
-| Pop 3B Cs | `pop_3b_cs` | `` | 1 | `.0f` |
-| Pop 3B Sb | `pop_3b_sb` | `` | 1 | `.0f` |
-| Pop 3B Sba | `pop_3b_sba` | `` | 1 | `.0f` |
-| Pop 3B Sba Count | `pop_3b_sba_count` | `` | 1 | `.0f` |
+| Pop 2B Cs | `pop_2b_cs` | `pop_2b_sba_count` | 1 | `.0f` |
+| Pop 2B Sb | `pop_2b_sb` | `pop_2b_sba_count` | 1 | `.0f` |
+| Pop 2B Sba | `pop_2b_sba` | `pop_2b_sba_count` | 1 | `.0f` |
+| Pop 2B Sba Count | `pop_2b_sba_count` | `pop_2b_sba_count` | 1 | `.0f` |
+| Pop 3B Cs | `pop_3b_cs` | `pop_3b_sba_count` | 1 | `.0f` |
+| Pop 3B Sb | `pop_3b_sb` | `pop_3b_sba_count` | 1 | `.0f` |
+| Pop 3B Sba | `pop_3b_sba` | `pop_3b_sba_count` | 1 | `.0f` |
+| Pop 3B Sba Count | `pop_3b_sba_count` | `pop_3b_sba_count` | 1 | `.0f` |
 | Reached On Int | `b_reached_on_int` | `` | 1 | `.0f` |
+| Rel League Bootup Distance | `rel_league_bootup_distance` | `` | 1 | `.0f` |
+| Rel League Burst Distance | `rel_league_burst_distance` | `` | 1 | `.0f` |
+| Rel League Reaction Distance | `rel_league_reaction_distance` | `` | 1 | `.0f` |
 | Sac Bunt | `b_sac_bunt` | `` | 1 | `.0f` |
 | Sac Fly | `b_sac_fly` | `` | 1 | `.0f` |
+| Sprint Speed | `sprint_speed` | `` | 1 | `.0f` |
 | Total Bases | `b_total_bases` | `` | 1 | `.0f` |
+| Total Pa | `b_total_pa` | `` | 1 | `.0f` |
 | Total Pitches | `b_total_pitches` | `` | 1 | `.0f` |
 | Total Sacrifices | `b_total_sacrifices` | `` | 1 | `.0f` |
 | Total Strike | `b_total_strike` | `` | 1 | `.0f` |
+| Xera | `xera` | `` | 1 | `.0f` |
+| Yearhidden | `yearhidden` | `` | 1 | `.0f` |
 
-### Plate Discipline / Swing Decisions (`30`)
+### Plate Discipline / Swing Decisions (`31`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
 | average swing length | `avg_swing_length` | `pitch_count` | 50 | `.3f` |
 | average swing speed | `avg_swing_speed` | `pitch_count` | 50 | `.1f` |
 | Blasts Swing | `blasts_swing` | `pitch_count` | 1 | `.0f` |
+| chase contact rate | `oz_contact_percent` | `pitch_count` | 50 | `.1f` |
+| chase percent | `oz_swing_percent` | `pitch_count` | 50 | `.1f` |
 | Edge | `edge` | `pitch_count` | 1 | `.0f` |
 | Edge Percent | `edge_percent` | `pitch_count` | 50 | `.1f` |
 | F Strike Percent | `f_strike_percent` | `pitch_count` | 50 | `.1f` |
@@ -115,25 +127,24 @@ Sample basis notes:
 | In Zone Percent | `in_zone_percent` | `pitch_count` | 50 | `.1f` |
 | In Zone Swing | `in_zone_swing` | `pitch_count` | 1 | `.0f` |
 | In Zone Swing Miss | `in_zone_swing_miss` | `pitch_count` | 1 | `.0f` |
-| Iz Contact Percent | `iz_contact_percent` | `pitch_count` | 50 | `.1f` |
 | Meatball Percent | `meatball_percent` | `pitch_count` | 50 | `.1f` |
 | Meatball Swing Percent | `meatball_swing_percent` | `pitch_count` | 50 | `.1f` |
 | Out Zone | `out_zone` | `pitch_count` | 1 | `.0f` |
 | Out Zone Percent | `out_zone_percent` | `pitch_count` | 50 | `.1f` |
 | Out Zone Swing | `out_zone_swing` | `pitch_count` | 1 | `.0f` |
 | Out Zone Swing Miss | `out_zone_swing_miss` | `pitch_count` | 1 | `.0f` |
-| Oz Contact Percent | `oz_contact_percent` | `pitch_count` | 50 | `.1f` |
 | Oz Swing Miss Percent | `oz_swing_miss_percent` | `pitch_count` | 50 | `.1f` |
-| Oz Swing Percent | `oz_swing_percent` | `pitch_count` | 50 | `.1f` |
-| Solidcontact Percent | `solidcontact_percent` | `pitch_count` | 50 | `.1f` |
+| Solid Contact Percent | `solidcontact_percent` | `pitch_count` | 50 | `.1f` |
 | Squared Up Swing | `squared_up_swing` | `pitch_count` | 1 | `.0f` |
-| Swing Percent | `swing_percent` | `pitch_count` | 50 | `.1f` |
+| swing rate | `swing_percent` | `pitch_count` | 50 | `.1f` |
+| Swing Take Run Value | `swing_take_run_value` | `pitch_count` | 1 | `.0f` |
 | Swinging Strike | `b_swinging_strike` | `pitch_count` | 1 | `.0f` |
 | Total Swinging Strike | `b_total_swinging_strike` | `pitch_count` | 1 | `.0f` |
 | vertical swing path | `vertical_swing_path` | `pitch_count` | 1 | `.0f` |
 | Whiff Percent | `whiff_percent` | `pitch_count` | 50 | `.1f` |
 | Z Swing Miss Percent | `z_swing_miss_percent` | `pitch_count` | 50 | `.1f` |
-| Z Swing Percent | `z_swing_percent` | `pitch_count` | 50 | `.1f` |
+| zone contact rate | `iz_contact_percent` | `pitch_count` | 50 | `.1f` |
+| zone swing rate | `z_swing_percent` | `pitch_count` | 50 | `.1f` |
 
 ### Rate / Expected Outcome Stats (`15`)
 
@@ -155,7 +166,7 @@ Sample basis notes:
 | Xslgdiff | `xslgdiff` | `ab` | 20 | `.3f` |
 | xwOBA | `xwoba` | `pa` | 20 | `.3f` |
 
-### Result / Counting Stats (`63`)
+### Result / Counting Stats (`69`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
@@ -166,12 +177,13 @@ Sample basis notes:
 | Caught Stealing 3B | `r_caught_stealing_3b` | `` | 1 | `.0f` |
 | Caught Stealing Home | `r_caught_stealing_home` | `` | 1 | `.0f` |
 | Double | `double` | `` | 1 | `.0f` |
+| Fielding Run Value | `fielding_run_value` | `` | 1 | `.0f` |
 | Foul | `b_foul` | `` | 1 | `.0f` |
 | Foul Tip | `b_foul_tip` | `` | 1 | `.0f` |
 | Game | `b_game` | `` | 1 | `.0f` |
-| Gnd Into Dp | `b_gnd_into_dp` | `` | 1 | `.0f` |
-| Gnd Into Tp | `b_gnd_into_tp` | `` | 1 | `.0f` |
-| Gnd Rule Double | `b_gnd_rule_double` | `` | 1 | `.0f` |
+| Ground Into Dp | `b_gnd_into_dp` | `` | 1 | `.0f` |
+| Ground Into Tp | `b_gnd_into_tp` | `` | 1 | `.0f` |
+| Ground Rule Double | `b_gnd_rule_double` | `` | 1 | `.0f` |
 | Hit | `hit` | `` | 1 | `.0f` |
 | Hit By Pitch | `b_hit_by_pitch` | `` | 1 | `.0f` |
 | Hit Fly | `b_hit_fly` | `` | 1 | `.0f` |
@@ -204,16 +216,21 @@ Sample basis notes:
 | Pinch Hit | `b_pinch_hit` | `` | 1 | `.0f` |
 | Pinch Run | `b_pinch_run` | `` | 1 | `.0f` |
 | Pitch Count Fastball | `pitch_count_fastball` | `pitch_count` | 1 | `.0f` |
+| Pitch Run Value Breaking | `pitch_run_value_breaking` | `` | 1 | `.0f` |
+| Pitch Run Value Fastball | `pitch_run_value_fastball` | `` | 1 | `.0f` |
+| Pitch Run Value Offspeed | `pitch_run_value_offspeed` | `` | 1 | `.0f` |
 | Pitchout | `b_pitchout` | `` | 1 | `.0f` |
 | Player Age | `player_age` | `` | 1 | `.2f` |
 | Rbi | `b_rbi` | `` | 1 | `.0f` |
 | Reached On Error | `b_reached_on_error` | `` | 1 | `.0f` |
+| Rel League Routing Distance | `rel_league_routing_distance` | `` | 1 | `.0f` |
 | Run | `r_run` | `` | 1 | `.0f` |
+| Runner Run Value | `runner_run_value` | `` | 1 | `.0f` |
 | Single | `single` | `` | 1 | `.0f` |
 | Stolen Base 2B | `r_stolen_base_2b` | `` | 1 | `.0f` |
 | Stolen Base 3B | `r_stolen_base_3b` | `` | 1 | `.0f` |
 | Stolen Base Home | `r_stolen_base_home` | `` | 1 | `.0f` |
-| Stolen Base Pct | `r_stolen_base_pct` | `` | 1 | `.0f` |
+| Stolen Base Percent | `r_stolen_base_pct` | `` | 1 | `.0f` |
 | Strikeout | `strikeout` | `` | 1 | `.0f` |
 | Total Ball | `b_total_ball` | `` | 1 | `.0f` |
 | Total Caught Stealing | `r_total_caught_stealing` | `` | 1 | `.0f` |
@@ -240,25 +257,25 @@ Sample basis notes:
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
-| average exit velocity | `exit_velocity_avg` | `batted_ball` | 1 | `.0f` |
-| average launch angle | `launch_angle_avg` | `batted_ball` | 1 | `.0f` |
+| average exit velocity | `exit_velocity_avg` | `batted_ball` | 10 | `.3f` |
+| average launch angle | `launch_angle_avg` | `batted_ball` | 10 | `.1f` |
 | bacon | `bacon` | `batted_ball` | 10 | `.2f` |
 | Barrel | `barrel` | `batted_ball` | 1 | `.0f` |
 | barrel rate | `barrel_batted_rate` | `batted_ball` | 1 | `.0f` |
-| Flareburner Percent | `flareburner_percent` | `batted_ball` | 10 | `.1f` |
-| Flyballs | `flyballs` | `batted_ball` | 1 | `.0f` |
-| Flyballs Percent | `flyballs_percent` | `batted_ball` | 10 | `.1f` |
-| Groundballs | `groundballs` | `batted_ball` | 1 | `.0f` |
-| Groundballs Percent | `groundballs_percent` | `batted_ball` | 10 | `.1f` |
+| Flare Burner Percent | `flareburner_percent` | `batted_ball` | 10 | `.1f` |
+| Fly Balls | `flyballs` | `batted_ball` | 1 | `.0f` |
+| Fly Balls Percent | `flyballs_percent` | `batted_ball` | 10 | `.1f` |
+| Ground Balls | `groundballs` | `batted_ball` | 1 | `.0f` |
+| Ground Balls Percent | `groundballs_percent` | `batted_ball` | 10 | `.1f` |
 | hard-hit rate | `hard_hit_percent` | `batted_ball` | 10 | `.1f` |
-| Linedrives | `linedrives` | `batted_ball` | 1 | `.0f` |
-| Linedrives Percent | `linedrives_percent` | `batted_ball` | 10 | `.1f` |
+| Line Drives | `linedrives` | `batted_ball` | 1 | `.0f` |
+| Line Drives Percent | `linedrives_percent` | `batted_ball` | 10 | `.1f` |
 | Opposite Percent | `opposite_percent` | `batted_ball` | 10 | `.1f` |
-| Poorlytopped Percent | `poorlytopped_percent` | `batted_ball` | 10 | `.1f` |
-| Poorlyunder Percent | `poorlyunder_percent` | `batted_ball` | 10 | `.1f` |
+| Poorly Topped Percent | `poorlytopped_percent` | `batted_ball` | 10 | `.1f` |
+| Poorly Under Percent | `poorlyunder_percent` | `batted_ball` | 10 | `.1f` |
 | Poorlyweak Percent | `poorlyweak_percent` | `batted_ball` | 10 | `.1f` |
-| Popups | `popups` | `batted_ball` | 1 | `.0f` |
-| Popups Percent | `popups_percent` | `batted_ball` | 10 | `.1f` |
+| Pop Ups | `popups` | `batted_ball` | 1 | `.0f` |
+| Pop Ups Percent | `popups_percent` | `batted_ball` | 10 | `.1f` |
 | Pull Percent | `pull_percent` | `batted_ball` | 10 | `.1f` |
 | Straightaway Percent | `straightaway_percent` | `batted_ball` | 10 | `.1f` |
 | sweet spot rate | `sweet_spot_percent` | `batted_ball` | 10 | `.1f` |
@@ -266,18 +283,19 @@ Sample basis notes:
 | xBAcon | `xbacon` | `batted_ball` | 10 | `.3f` |
 | xwOBAcon | `xwobacon` | `batted_ball` | 10 | `.3f` |
 
-### Other (`21`)
+### Other (`25`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
 | Ab | `ab` | `` | 1 | `.0f` |
-| Ab Scoring | `p_ab_scoring` | `` | 1 | `.0f` |
+| Ab | `p_ab` | `` | 1 | `.0f` |
+| Ab Scoring | `p_ab_scoring` | `p_ab_scoring` | 1 | `.0f` |
 | Arm Angle | `arm_angle` | `` | 1 | `.1f` |
 | Avg Best Speed | `avg_best_speed` | `` | 1 | `.1f` |
 | Avg Hyper Speed | `avg_hyper_speed` | `` | 1 | `.1f` |
 | bb percent | `bb_percent` | `pa` | 20 | `.1f` |
-| Catcher Interf | `p_catcher_interf` | `` | 1 | `.0f` |
-| Defensive Indiff | `p_defensive_indiff` | `` | 1 | `.0f` |
+| Catcher Interference | `p_catcher_interf` | `` | 1 | `.0f` |
+| Defensive Indifference | `p_defensive_indiff` | `` | 1 | `.0f` |
 | k percent | `k_percent` | `pa` | 20 | `.1f` |
 | Missed Bunt | `p_missed_bunt` | `` | 1 | `.0f` |
 | Pa | `pa` | `` | 1 | `.0f` |
@@ -286,11 +304,14 @@ Sample basis notes:
 | Pitch Count Offspeed | `pitch_count_offspeed` | `pitch_count` | 1 | `.0f` |
 | Sac Bunt | `p_sac_bunt` | `` | 1 | `.0f` |
 | Sac Fly | `p_sac_fly` | `` | 1 | `.0f` |
-| Starting P | `p_starting_p` | `` | 1 | `.0f` |
+| Starting Pitcher | `p_starting_p` | `` | 1 | `.0f` |
 | Total Bases | `p_total_bases` | `` | 1 | `.0f` |
+| Total Pa | `p_total_pa` | `` | 1 | `.0f` |
 | Total Pitches | `p_total_pitches` | `` | 1 | `.0f` |
 | Total Sacrifices | `p_total_sacrifices` | `` | 1 | `.0f` |
 | Total Strike | `p_total_strike` | `` | 1 | `.0f` |
+| Xera | `xera` | `` | 1 | `.0f` |
+| Yearhidden | `yearhidden` | `` | 1 | `.0f` |
 
 ### Pitch Arsenal Shape (`105`)
 
@@ -422,13 +443,15 @@ Sample basis notes:
 | Splitter Count | `n_fs_formatted` | `n_fs_formatted` | 1 | `.0f` |
 | Sweeper Count | `n_st_formatted` | `n_st_formatted` | 1 | `.0f` |
 
-### Plate Discipline / Swing Decisions (`30`)
+### Plate Discipline / Swing Decisions (`31`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
 | average swing length | `avg_swing_length` | `pitch_count` | 50 | `.3f` |
 | average swing speed | `avg_swing_speed` | `pitch_count` | 50 | `.1f` |
 | Blasts Swing | `blasts_swing` | `pitch_count` | 1 | `.0f` |
+| chase contact rate | `oz_contact_percent` | `pitch_count` | 50 | `.1f` |
+| chase percent | `oz_swing_percent` | `pitch_count` | 50 | `.1f` |
 | Edge | `edge` | `pitch_count` | 1 | `.0f` |
 | Edge Percent | `edge_percent` | `pitch_count` | 50 | `.1f` |
 | F Strike Percent | `f_strike_percent` | `pitch_count` | 50 | `.1f` |
@@ -437,25 +460,24 @@ Sample basis notes:
 | In Zone Percent | `in_zone_percent` | `pitch_count` | 50 | `.1f` |
 | In Zone Swing | `in_zone_swing` | `pitch_count` | 1 | `.0f` |
 | In Zone Swing Miss | `in_zone_swing_miss` | `pitch_count` | 1 | `.0f` |
-| Iz Contact Percent | `iz_contact_percent` | `pitch_count` | 50 | `.1f` |
 | Meatball Percent | `meatball_percent` | `pitch_count` | 50 | `.1f` |
 | Meatball Swing Percent | `meatball_swing_percent` | `pitch_count` | 50 | `.1f` |
 | Out Zone | `out_zone` | `pitch_count` | 1 | `.0f` |
 | Out Zone Percent | `out_zone_percent` | `pitch_count` | 50 | `.1f` |
 | Out Zone Swing | `out_zone_swing` | `pitch_count` | 1 | `.0f` |
 | Out Zone Swing Miss | `out_zone_swing_miss` | `pitch_count` | 1 | `.0f` |
-| Oz Contact Percent | `oz_contact_percent` | `pitch_count` | 50 | `.1f` |
 | Oz Swing Miss Percent | `oz_swing_miss_percent` | `pitch_count` | 50 | `.1f` |
-| Oz Swing Percent | `oz_swing_percent` | `pitch_count` | 50 | `.1f` |
-| Solidcontact Percent | `solidcontact_percent` | `pitch_count` | 50 | `.1f` |
+| Solid Contact Percent | `solidcontact_percent` | `pitch_count` | 50 | `.1f` |
 | Squared Up Swing | `squared_up_swing` | `pitch_count` | 1 | `.0f` |
-| Swing Percent | `swing_percent` | `pitch_count` | 50 | `.1f` |
+| swing rate | `swing_percent` | `pitch_count` | 50 | `.1f` |
+| Swing Take Run Value | `swing_take_run_value` | `pitch_count` | 1 | `.0f` |
 | Swinging Strike | `p_swinging_strike` | `pitch_count` | 1 | `.0f` |
 | Total Swinging Strike | `p_total_swinging_strike` | `pitch_count` | 1 | `.0f` |
 | vertical swing path | `vertical_swing_path` | `pitch_count` | 1 | `.0f` |
 | Whiff Percent | `whiff_percent` | `pitch_count` | 50 | `.1f` |
 | Z Swing Miss Percent | `z_swing_miss_percent` | `pitch_count` | 50 | `.1f` |
-| Z Swing Percent | `z_swing_percent` | `pitch_count` | 50 | `.1f` |
+| zone contact rate | `iz_contact_percent` | `pitch_count` | 50 | `.1f` |
+| zone swing rate | `z_swing_percent` | `pitch_count` | 50 | `.1f` |
 
 ### Rate / Expected Outcome Stats (`16`)
 
@@ -478,7 +500,7 @@ Sample basis notes:
 | Xslgdiff | `xslgdiff` | `ab` | 20 | `.3f` |
 | xwOBA | `xwoba` | `pa` | 20 | `.3f` |
 
-### Result / Counting Stats (`81`)
+### Result / Counting Stats (`93`)
 
 | Metric | Column | Sample Basis | Minimum Sample | Format |
 | --- | --- | --- | ---: | --- |
@@ -495,25 +517,28 @@ Sample basis notes:
 | Caught Stealing Home | `p_caught_stealing_home` | `` | 1 | `.0f` |
 | Complete Game | `p_complete_game` | `` | 1 | `.0f` |
 | Double | `double` | `` | 1 | `.0f` |
+| Double | `p_double` | `` | 1 | `.0f` |
 | Earned Run | `p_earned_run` | `` | 1 | `.0f` |
 | era | `p_era` | `pa` | 20 | `.2f` |
+| Fielding Run Value | `fielding_run_value` | `` | 1 | `.0f` |
 | Foul | `p_foul` | `` | 1 | `.0f` |
 | Foul Tip | `p_foul_tip` | `` | 1 | `.0f` |
 | Game | `p_game` | `` | 1 | `.0f` |
 | Game Finished | `p_game_finished` | `` | 1 | `.0f` |
 | Game In Relief | `p_game_in_relief` | `` | 1 | `.0f` |
-| Gnd Into Dp | `p_gnd_into_dp` | `` | 1 | `.0f` |
-| Gnd Into Tp | `p_gnd_into_tp` | `` | 1 | `.0f` |
-| Gnd Rule Double | `p_gnd_rule_double` | `` | 1 | `.0f` |
+| Ground Into Dp | `p_gnd_into_dp` | `` | 1 | `.0f` |
+| Ground Into Tp | `p_gnd_into_tp` | `` | 1 | `.0f` |
+| Ground Rule Double | `p_gnd_rule_double` | `` | 1 | `.0f` |
 | Hit | `hit` | `pa` | 1 | `.0f` |
 | Hit By Pitch | `p_hit_by_pitch` | `pa` | 1 | `.0f` |
 | Hit Fly | `p_hit_fly` | `pa` | 1 | `.0f` |
 | Hit Ground | `p_hit_ground` | `pa` | 1 | `.0f` |
 | Hit Into Play | `p_hit_into_play` | `pa` | 1 | `.0f` |
 | Hit Line Drive | `p_hit_line_drive` | `pa` | 1 | `.0f` |
-| Hit Scoring | `p_hit_scoring` | `pa` | 1 | `.0f` |
+| Hit Scoring | `p_hit_scoring` | `p_ab_scoring` | 1 | `.0f` |
 | Hold | `p_hold` | `` | 1 | `.0f` |
 | Home Run | `home_run` | `pa` | 1 | `.0f` |
+| Home Run | `p_home_run` | `pa` | 1 | `.0f` |
 | Inh Runner | `p_inh_runner` | `` | 1 | `.0f` |
 | Inh Runner Scored | `p_inh_runner_scored` | `` | 1 | `.0f` |
 | Intent Ball | `p_intent_ball` | `` | 1 | `.0f` |
@@ -536,6 +561,9 @@ Sample basis notes:
 | Pickoff Error 2B | `p_pickoff_error_2b` | `` | 1 | `.0f` |
 | Pickoff Error 3B | `p_pickoff_error_3b` | `` | 1 | `.0f` |
 | Pitch Count Fastball | `pitch_count_fastball` | `pitch_count` | 1 | `.0f` |
+| Pitch Run Value Breaking | `pitch_run_value_breaking` | `` | 1 | `.0f` |
+| Pitch Run Value Fastball | `pitch_run_value_fastball` | `` | 1 | `.0f` |
+| Pitch Run Value Offspeed | `pitch_run_value_offspeed` | `` | 1 | `.0f` |
 | Pitchout | `p_pitchout` | `` | 1 | `.0f` |
 | Player Age | `player_age` | `` | 1 | `.2f` |
 | Quality Start | `p_quality_start` | `` | 1 | `.0f` |
@@ -544,22 +572,28 @@ Sample basis notes:
 | Relief No Out | `p_relief_no_out` | `` | 1 | `.0f` |
 | Run | `p_run` | `` | 1 | `.0f` |
 | Run Support | `p_run_support` | `` | 1 | `.0f` |
+| Runner Run Value | `runner_run_value` | `` | 1 | `.0f` |
 | Save | `p_save` | `` | 1 | `.0f` |
 | Shutout | `p_shutout` | `` | 1 | `.0f` |
 | Single | `single` | `` | 1 | `.0f` |
+| Single | `p_single` | `` | 1 | `.0f` |
 | Stolen Base 2B | `p_stolen_base_2b` | `` | 1 | `.0f` |
 | Stolen Base 3B | `p_stolen_base_3b` | `` | 1 | `.0f` |
 | Stolen Base Home | `p_stolen_base_home` | `` | 1 | `.0f` |
 | Strikeout | `strikeout` | `pa` | 1 | `.0f` |
+| Strikeout | `p_strikeout` | `pa` | 1 | `.0f` |
 | Total Ball | `p_total_ball` | `` | 1 | `.0f` |
 | Total Caught Stealing | `p_total_caught_stealing` | `` | 1 | `.0f` |
+| Total Hits | `p_total_hits` | `pa` | 1 | `.0f` |
 | Total Pickoff | `p_total_pickoff` | `` | 1 | `.0f` |
 | Total Pickoff Attempt | `p_total_pickoff_attempt` | `` | 1 | `.0f` |
 | Total Pickoff Error | `p_total_pickoff_error` | `` | 1 | `.0f` |
 | Total Stolen Base | `p_total_stolen_base` | `` | 1 | `.0f` |
 | Triple | `triple` | `` | 1 | `.0f` |
+| Triple | `p_triple` | `` | 1 | `.0f` |
 | Unearned Run | `p_unearned_run` | `` | 1 | `.0f` |
 | Walk | `walk` | `pa` | 1 | `.0f` |
+| Walk | `p_walk` | `pa` | 1 | `.0f` |
 | Walkoff | `p_walkoff` | `pa` | 1 | `.0f` |
 | Wild Pitch | `p_wild_pitch` | `` | 1 | `.0f` |
 | Win | `p_win` | `` | 1 | `.0f` |

@@ -32,6 +32,14 @@ What it does:
 1. runs the local Statcast daily sync with a small rolling backfill window
 2. re-imports the bundled custom-history CSVs from `data/statcast_history/` if they exist
 
+If you also want the bundled custom-history CSVs refreshed directly from Baseball Savant before import, use:
+
+```bash
+python -m mlb_history_bot refresh-statcast-daily --fetch-history-from-savant
+```
+
+That mode fetches only the current live season by default and merges those rows into the existing bundled history files, which keeps the daily refresh fast.
+
 Default behavior:
 
 - `chunk-days=3`
@@ -58,18 +66,26 @@ python -m mlb_history_bot refresh-statcast-daily --backfill-days 5 --chunk-days 
 
 The local warehouse can self-refresh from public Statcast data.
 
-The imported custom-history tables cannot. They are snapshots. To keep them current, you need fresh CSV exports first.
+The imported custom-history tables are still snapshots, but the repo can now refresh those bundled CSVs directly from Savant's custom leaderboard pages.
 
 Daily workflow:
 
-1. export fresh custom leaderboard CSVs from Baseball Savant
-2. overwrite:
-   - `Batter_Stats_Statcast_History.csv`
-   - `Pitcher_Stats_Statcast_History.csv`
-3. run:
+1. refresh the bundled custom-history CSVs for the live season:
+
+```bash
+python -m mlb_history_bot refresh-bundled-statcast-history
+```
+
+2. then run:
 
 ```bash
 python -m mlb_history_bot refresh-statcast-daily
+```
+
+For a one-time full-history rebuild of the bundled CSVs, run:
+
+```bash
+python -m mlb_history_bot refresh-bundled-statcast-history --full-history
 ```
 
 ## Railway Workflow
@@ -82,6 +98,12 @@ If Railway is the live deployment target:
 
 ```bash
 python -m mlb_history_bot refresh-statcast-daily
+```
+
+If you want Railway to pull the latest live-season custom-history rows itself before import:
+
+```bash
+python -m mlb_history_bot refresh-statcast-daily --fetch-history-from-savant
 ```
 
 If you only want to refresh the imported history after a CSV update:
@@ -101,13 +123,15 @@ python -m mlb_history_bot sync-statcast --daily --backfill-days 3 --chunk-days 3
 For the broadest daily freshness:
 
 1. keep the local Statcast warehouse on a daily rolling sync
-2. refresh the custom leaderboard CSV exports once per day
-3. re-import those exports immediately after they land
+2. refresh the bundled Savant custom-history CSVs once per day for the live season
+3. re-import those refreshed CSVs immediately after they land
 
 That gives you:
 
 - fresh live/event/park/pitch-type coverage from the local Statcast warehouse
-- fresh season-level leaderboard coverage for the `475` imported Statcast metrics
+- fresh season-level leaderboard coverage for the `509` imported Statcast metrics
+
+The expensive full-history bundled refresh should only be needed occasionally. Daily maintenance can stay on the live season only.
 
 ## Failure Modes To Watch
 
